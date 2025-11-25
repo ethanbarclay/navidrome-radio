@@ -1,0 +1,107 @@
+version: '3.9'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: navidrome_radio
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis cache
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Navidrome music server (example - configure with your music library)
+  navidrome:
+    image: deluan/navidrome:latest
+    restart: unless-stopped
+    environment:
+      ND_SCANSCHEDULE: 1h
+      ND_LOGLEVEL: info
+      ND_SESSIONTIMEOUT: 24h
+      ND_BASEURL: ""
+    ports:
+      - "4533:4533"
+    volumes:
+      - navidrome_data:/data
+      - ${MUSIC_DIR:-./music}:/music:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4533/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Navidrome Radio Backend
+  backend:
+    image: ethanbarclay/navidrome-radio-backend:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/navidrome_radio
+      REDIS_URL: redis://redis:6379
+      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_USER: ${NAVIDROME_USER}
+      NAVIDROME_PASSWORD: ${NAVIDROME_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8000
+      RUST_LOG: info
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      navidrome:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/api/v1/stations"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Navidrome Radio Frontend
+  frontend:
+    image: ethanbarclay/navidrome-radio-frontend:latest
+    restart: unless-stopped
+    environment:
+      ORIGIN: http://localhost:3000
+      BODY_SIZE_LIMIT: Infinity
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:
+  navidrome_data:

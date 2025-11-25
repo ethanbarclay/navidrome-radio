@@ -1,0 +1,49 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Rust/Cargo
+/backend/target/
+/backend/**/*.rs.bk
+/backend/Cargo.lock
+
+# Frontend/Node
+/frontend/node_modules/
+/frontend/.svelte-kit/
+/frontend/build/
+/frontend/dist/
+/frontend/.vite/
+/frontend/package-lock.json
+/frontend/yarn.lock
+/frontend/pnpm-lock.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+logs/
+
+# Docker volumes
+postgres_data/
+redis_data/
+navidrome_data/
+
+# Music directory (example)
+music/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

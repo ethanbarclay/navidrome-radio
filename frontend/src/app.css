@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+	--touch-target-min: 44px;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+	-moz-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
+
+button,
+a {
+	-webkit-tap-highlight-color: transparent;
+}
+
+body {
+	overscroll-behavior-y: contain;
+	-webkit-overflow-scrolling: touch;
+}
+
+@supports (padding: max(0px)) {
+	body {
+		padding-left: max(0px, env(safe-area-inset-left));
+		padding-right: max(0px, env(safe-area-inset-right));
+		padding-bottom: max(0px, env(safe-area-inset-bottom));
+	}
+}

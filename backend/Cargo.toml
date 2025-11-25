@@ -1,0 +1,68 @@
+[package]
+name = "navidrome-radio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors", "trace", "compression-gzip"] }
+tokio = { version = "1.35", features = ["full"] }
+
+# Embed frontend assets
+rust-embed = { version = "8.2", features = ["compression"] }
+mime_guess = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json"] }
+
+# Redis
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+
+# Authentication
+jsonwebtoken = "9.2"
+argon2 = "0.5"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "stream"] }
+
+# Async runtime
+async-trait = "0.1"
+futures = "0.3"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Configuration
+dotenvy = "0.15"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Crypto
+md5 = "0.7"
+rand = "0.8"
+
+# Rate limiting
+governor = "0.6"
+
+# Validation
+validator = { version = "0.17", features = ["derive"] }
+
+# Audio (simplified for MVP - will use FFmpeg directly)
+bytes = "1.5"
+
+[dev-dependencies]
+tower = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"

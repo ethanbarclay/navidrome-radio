@@ -1,0 +1,105 @@
+# Multi-stage build for unified Navidrome Radio (Backend + Frontend)
+FROM rust:1.83-slim as backend-builder
+
+WORKDIR /app/backend
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy backend manifests
+COPY backend/Cargo.toml backend/Cargo.lock ./
+
+# Copy backend source code
+COPY backend/src ./src
+COPY backend/migrations ./migrations
+
+# Build backend for release
+RUN cargo build --release
+
+# Build frontend
+FROM node:20-alpine as frontend-builder
+
+WORKDIR /app/frontend
+
+# Copy frontend package files
+COPY frontend/package.json frontend/package-lock.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy frontend source code
+COPY frontend/ ./
+
+# Build the frontend
+RUN npm run build
+
+# Runtime stage - combine both
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    supervisor \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy backend binary from builder
+COPY --from=backend-builder /app/backend/target/release/navidrome-radio /usr/local/bin/navidrome-radio
+COPY --from=backend-builder /app/backend/migrations /app/migrations
+
+# Copy frontend build from builder
+COPY --from=frontend-builder /app/frontend/build /app/frontend/build
+COPY --from=frontend-builder /app/frontend/package.json /app/frontend/
+COPY --from=frontend-builder /app/frontend/node_modules /app/frontend/node_modules
+
+# Create supervisord configuration
+RUN mkdir -p /var/log/supervisor
+COPY <<EOF /etc/supervisor/conf.d/navidrome-radio.conf
+[supervisord]
+nodaemon=true
+user=root
+
+[program:backend]
+command=/usr/local/bin/navidrome-radio
+directory=/app
+autostart=true
+autorestart=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+environment=RUST_LOG="%(ENV_RUST_LOG)s"
+
+[program:frontend]
+command=node build
+directory=/app/frontend
+autostart=true
+autorestart=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+environment=NODE_ENV="production",ORIGIN="%(ENV_ORIGIN)s"
+EOF
+
+# Expose ports
+EXPOSE 8000 3000
+
+# Set default environment variables
+ENV RUST_LOG=info
+ENV ORIGIN=http://localhost:3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/stations && curl -f http://localhost:3000 || exit 1
+
+# Run supervisord
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
