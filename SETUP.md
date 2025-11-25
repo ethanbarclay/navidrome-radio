@@ -17,8 +17,9 @@ cd /Users/ethanbarclay/Projects/navidrome-radio
 # Initialize git if not already done
 git init
 
-# Add all files
+# Add all files (including package-lock.json which is needed for CI builds)
 git add .
+git add -f frontend/package-lock.json
 
 # Commit
 git commit -m "Initial commit: Navidrome Radio with unified Docker image"

@@ -14,7 +14,6 @@
 /frontend/build/
 /frontend/dist/
 /frontend/.vite/
-/frontend/package-lock.json
 /frontend/yarn.lock
 /frontend/pnpm-lock.yaml
 
