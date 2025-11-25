@@ -17,7 +17,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build backend with embedded frontend
-FROM rust:1.83-slim as backend-builder
+FROM rustlang/rust:nightly-slim as backend-builder
 
 WORKDIR /app
 
