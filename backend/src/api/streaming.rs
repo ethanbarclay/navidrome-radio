@@ -2,7 +2,7 @@ use crate::services::NavidromeClient;
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, StatusCode},
     response::Response,
     routing::get,
     Router,
@@ -29,26 +29,29 @@ async fn stream_track(
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
-    let status = response.status();
-    let mut headers = HeaderMap::new();
+    let status_code = response.status().as_u16();
 
-    // Copy important headers
-    if let Some(content_type) = response.headers().get(header::CONTENT_TYPE) {
-        headers.insert(header::CONTENT_TYPE, content_type.clone());
+    // Convert headers from reqwest to axum
+    let mut builder = Response::builder().status(status_code);
+
+    // Copy important headers using string lookups
+    if let Some(content_type) = response.headers().get("content-type") {
+        if let Ok(value) = content_type.to_str() {
+            builder = builder.header(header::CONTENT_TYPE, value);
+        }
     }
-    if let Some(content_length) = response.headers().get(header::CONTENT_LENGTH) {
-        headers.insert(header::CONTENT_LENGTH, content_length.clone());
+    if let Some(content_length) = response.headers().get("content-length") {
+        if let Ok(value) = content_length.to_str() {
+            builder = builder.header(header::CONTENT_LENGTH, value);
+        }
     }
 
     // Enable range requests for audio seeking
-    headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    builder = builder.header(header::ACCEPT_RANGES, "bytes");
 
     let body = Body::from_stream(response.bytes_stream());
 
-    Ok(Response::builder()
-        .status(status)
-        .body(body)
-        .unwrap())
+    Ok(builder.body(body).unwrap())
 }
 
 async fn get_cover(
@@ -65,21 +68,22 @@ async fn get_cover(
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
-    let status = response.status();
-    let mut headers = HeaderMap::new();
+    let status_code = response.status().as_u16();
 
-    // Copy content type
-    if let Some(content_type) = response.headers().get(header::CONTENT_TYPE) {
-        headers.insert(header::CONTENT_TYPE, content_type.clone());
+    // Convert headers from reqwest to axum
+    let mut builder = Response::builder().status(status_code);
+
+    // Copy content type using string lookup
+    if let Some(content_type) = response.headers().get("content-type") {
+        if let Ok(value) = content_type.to_str() {
+            builder = builder.header(header::CONTENT_TYPE, value);
+        }
     }
 
     // Enable caching for covers
-    headers.insert(header::CACHE_CONTROL, "public, max-age=3600".parse().unwrap());
+    builder = builder.header(header::CACHE_CONTROL, "public, max-age=3600");
 
     let bytes = response.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
 
-    Ok(Response::builder()
-        .status(status)
-        .body(Body::from(bytes))
-        .unwrap())
+    Ok(builder.body(Body::from(bytes)).unwrap())
 }
