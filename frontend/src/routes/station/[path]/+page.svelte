@@ -21,8 +21,7 @@
 	let currentTrackId = $state<string | null>(null);
 	let currentPosition = $state(0);
 	let progressInterval: number;
-	let autoplayBlocked = $state(false);
-	let needsUserInteraction = $state(false);
+	let hasStartedPlaying = $state(false);
 	let mediaSession: MediaSession | null = null;
 
 	onMount(async () => {
@@ -209,61 +208,37 @@
 		const elapsedSeconds = (now - startedAt) / 1000;
 
 		const setPosition = () => {
-			if (!audioElement) return;
+			if (!audioElement || elapsedSeconds < 0 || elapsedSeconds >= np.track.duration) return;
 
-			if (elapsedSeconds >= 0 && elapsedSeconds < np.track.duration) {
-				try {
-					audioElement.currentTime = elapsedSeconds;
+			try {
+				audioElement.currentTime = elapsedSeconds;
+
+				// Only try to play if user has already started playback
+				if (hasStartedPlaying) {
 					audioElement.muted = isMuted;
 					audioElement.volume = 1.0;
-
-					audioElement.play().then(() => {
-						autoplayBlocked = false;
-					}).catch(() => {
-						// Browser blocked autoplay, must start muted
-						if (audioElement) {
-							const userWantedUnmuted = !isMuted;
-							audioElement.muted = true;
-							isMuted = true;
-
-							audioElement.play().then(() => {
-								if (userWantedUnmuted) {
-									needsUserInteraction = true;
-								}
-							});
-						}
-					});
-				} catch (err) {
-					console.error('Error setting audio position:', err);
+					audioElement.play();
 				}
+			} catch (err) {
+				console.error('Error setting audio position:', err);
 			}
 		};
 
 		if (audioElement.readyState >= 2) {
 			setPosition();
 		} else {
-			const onLoadedData = () => {
+			const onReady = () => {
 				setPosition();
-				cleanup();
+				audioElement?.removeEventListener('loadeddata', onReady);
+				audioElement?.removeEventListener('canplay', onReady);
 			};
 
-			const onCanPlay = () => {
-				setPosition();
-				cleanup();
-			};
-
-			const cleanup = () => {
-				audioElement?.removeEventListener('loadeddata', onLoadedData);
-				audioElement?.removeEventListener('canplay', onCanPlay);
-			};
-
-			audioElement.addEventListener('loadeddata', onLoadedData, { once: true });
-			audioElement.addEventListener('canplay', onCanPlay, { once: true });
+			audioElement.addEventListener('loadeddata', onReady, { once: true });
+			audioElement.addEventListener('canplay', onReady, { once: true });
 
 			setTimeout(() => {
 				if (audioElement && audioElement.readyState < 2) {
 					setPosition();
-					cleanup();
 				}
 			}, 2000);
 		}
@@ -298,29 +273,40 @@
 		}
 	}
 
+	function startListening() {
+		if (!audioElement || !nowPlaying) return;
+
+		hasStartedPlaying = true;
+		audioElement.muted = isMuted;
+		audioElement.volume = 1.0;
+
+		// Sync to correct position in the track
+		const startedAt = new Date(nowPlaying.started_at).getTime();
+		const now = Date.now();
+		const elapsedSeconds = (now - startedAt) / 1000;
+
+		if (elapsedSeconds >= 0 && elapsedSeconds < nowPlaying.track.duration) {
+			audioElement.currentTime = elapsedSeconds;
+		}
+
+		audioElement.play();
+	}
+
 	function toggleMute() {
 		if (!audioElement) return;
 
+		// If user hasn't started playing yet, start playing
+		if (!hasStartedPlaying) {
+			startListening();
+			return;
+		}
+
 		isMuted = !isMuted;
 		audioElement.muted = isMuted;
-		autoplayBlocked = false;
-		needsUserInteraction = false;
 
 		localStorage.setItem('radio_muted', isMuted.toString());
 
 		if (!isMuted && audioElement.paused) {
-			audioElement.play();
-		}
-	}
-
-	function resumePlayback() {
-		if (!audioElement) return;
-
-		needsUserInteraction = false;
-		isMuted = false;
-		audioElement.muted = false;
-
-		if (audioElement.paused) {
 			audioElement.play();
 		}
 	}
@@ -355,9 +341,9 @@
 
 		<!-- Now playing - centered -->
 		<div class="flex-1 flex flex-col items-center justify-center space-y-4 md:space-y-6 max-w-2xl mx-auto w-full">
-			<!-- Resume playback overlay -->
-			{#if needsUserInteraction}
-				<div class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 backdrop-blur-sm">
+			<!-- Start listening overlay -->
+			{#if !hasStartedPlaying}
+				<div class="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 backdrop-blur-sm">
 					<div class="text-center space-y-6 p-8">
 						<div class="text-white">
 							<svg class="w-24 h-24 mx-auto mb-4 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
@@ -367,14 +353,14 @@
 									clip-rule="evenodd"
 								/>
 							</svg>
-							<h2 class="text-2xl md:text-3xl font-bold mb-2">Welcome Back!</h2>
-							<p class="text-gray-300 mb-6">Click below to resume listening</p>
+							<p class="text-lg md:text-xl text-gray-300 mb-2">Now Playing: {nowPlaying.track.title}</p>
+							<p class="text-base text-gray-400">{nowPlaying.track.artist}</p>
 						</div>
 						<button
-							onclick={resumePlayback}
-							class="px-12 py-5 bg-blue-600 hover:bg-blue-700 text-white text-xl font-bold rounded-full transition-all transform hover:scale-105 active:scale-95 shadow-2xl"
+							onclick={startListening}
+							class="px-16 py-6 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white text-2xl font-bold rounded-full transition-all transform hover:scale-105 active:scale-95 shadow-2xl"
 						>
-							Resume Playback
+							Play Radio
 						</button>
 					</div>
 				</div>
@@ -428,18 +414,11 @@
 				</div>
 			</div>
 
-			<!-- Autoplay blocked notification -->
-			{#if autoplayBlocked}
-				<div class="bg-orange-600 text-white px-6 py-3 rounded-lg text-sm md:text-base font-medium animate-pulse">
-					Click the speaker button below to hear audio
-				</div>
-			{/if}
-
 			<!-- Mute/Unmute button -->
 			<button
 				onclick={toggleMute}
-				class="w-16 h-16 md:w-20 md:h-20 bg-blue-600 hover:bg-blue-700 rounded-full flex items-center justify-center transition-colors active:scale-95 {autoplayBlocked ? 'ring-4 ring-orange-500 ring-offset-2 ring-offset-gray-900' : ''}"
-				title={isMuted ? 'Unmute' : 'Mute'}
+				class="w-16 h-16 md:w-20 md:h-20 bg-blue-600 hover:bg-blue-700 rounded-full flex items-center justify-center transition-colors active:scale-95"
+				title={hasStartedPlaying ? (isMuted ? 'Unmute' : 'Mute') : 'Start Listening'}
 			>
 				{#if isMuted}
 					<!-- Muted icon -->
