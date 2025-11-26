@@ -54,9 +54,9 @@ services:
       timeout: 10s
       retries: 3
 
-  # Navidrome Radio Backend
-  backend:
-    image: ethanbarclay/navidrome-radio-backend:latest
+  # Navidrome Radio (unified backend + frontend)
+  navidrome-radio:
+    image: ethanbarclay/navidrome-radio:latest
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/navidrome_radio
@@ -80,23 +80,6 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/api/v1/stations"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Navidrome Radio Frontend
-  frontend:
-    image: ethanbarclay/navidrome-radio-frontend:latest
-    restart: unless-stopped
-    environment:
-      ORIGIN: http://localhost:3000
-      BODY_SIZE_LIMIT: Infinity
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
