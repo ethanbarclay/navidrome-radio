@@ -2,8 +2,8 @@ use crate::services::NavidromeClient;
 use axum::{
     body::Body,
     extract::{Path, State},
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
+    http::{header, HeaderMap, StatusCode},
+    response::Response,
     routing::get,
     Router,
 };
@@ -21,11 +21,33 @@ async fn stream_track(
 ) -> Result<Response, StatusCode> {
     let stream_url = navidrome.get_stream_url(&track_id).await;
 
-    // Redirect to Navidrome stream URL
+    // Proxy the stream through our backend
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&stream_url)
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    let status = response.status();
+    let mut headers = HeaderMap::new();
+
+    // Copy important headers
+    if let Some(content_type) = response.headers().get(header::CONTENT_TYPE) {
+        headers.insert(header::CONTENT_TYPE, content_type.clone());
+    }
+    if let Some(content_length) = response.headers().get(header::CONTENT_LENGTH) {
+        headers.insert(header::CONTENT_LENGTH, content_length.clone());
+    }
+
+    // Enable range requests for audio seeking
+    headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+
+    let body = Body::from_stream(response.bytes_stream());
+
     Ok(Response::builder()
-        .status(StatusCode::TEMPORARY_REDIRECT)
-        .header(header::LOCATION, stream_url)
-        .body(Body::empty())
+        .status(status)
+        .body(body)
         .unwrap())
 }
 
@@ -35,10 +57,29 @@ async fn get_cover(
 ) -> Result<Response, StatusCode> {
     let cover_url = navidrome.get_cover_url(&track_id).await;
 
-    // Redirect to Navidrome cover URL
+    // Proxy the cover through our backend
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&cover_url)
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    let status = response.status();
+    let mut headers = HeaderMap::new();
+
+    // Copy content type
+    if let Some(content_type) = response.headers().get(header::CONTENT_TYPE) {
+        headers.insert(header::CONTENT_TYPE, content_type.clone());
+    }
+
+    // Enable caching for covers
+    headers.insert(header::CACHE_CONTROL, "public, max-age=3600".parse().unwrap());
+
+    let bytes = response.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+
     Ok(Response::builder()
-        .status(StatusCode::TEMPORARY_REDIRECT)
-        .header(header::LOCATION, cover_url)
-        .body(Body::empty())
+        .status(status)
+        .body(Body::from(bytes))
         .unwrap())
 }
