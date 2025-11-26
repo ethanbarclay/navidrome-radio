@@ -34,26 +34,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # Navidrome music server (example - configure with your music library)
-  navidrome:
-    image: deluan/navidrome:latest
-    restart: unless-stopped
-    environment:
-      ND_SCANSCHEDULE: 1h
-      ND_LOGLEVEL: info
-      ND_SESSIONTIMEOUT: 24h
-      ND_BASEURL: ""
-    ports:
-      - "4533:4533"
-    volumes:
-      - navidrome_data:/data
-      - ${MUSIC_DIR:-./music}:/music:ro
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4533/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   # Navidrome Radio (unified backend + frontend)
   navidrome-radio:
     image: ethanbarclay/navidrome-radio:latest
@@ -61,7 +41,7 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/navidrome_radio
       REDIS_URL: redis://redis:6379
-      NAVIDROME_URL: http://navidrome:4533
+      NAVIDROME_URL: ${NAVIDROME_URL}
       NAVIDROME_USER: ${NAVIDROME_USER}
       NAVIDROME_PASSWORD: ${NAVIDROME_PASSWORD}
       JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
@@ -76,8 +56,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      navidrome:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/api/v1/stations"]
       interval: 30s
@@ -87,4 +65,3 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  navidrome_data:
