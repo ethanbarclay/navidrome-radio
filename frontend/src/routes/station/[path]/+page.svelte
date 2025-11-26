@@ -23,8 +23,14 @@
 	let progressInterval: number;
 	let autoplayBlocked = $state(false);
 	let needsUserInteraction = $state(false);
+	let mediaSession: MediaSession | null = null;
 
 	onMount(async () => {
+		// Initialize Media Session API for Android notification center
+		if ('mediaSession' in navigator) {
+			mediaSession = navigator.mediaSession;
+			setupMediaSession();
+		}
 		try {
 			// Find station by path
 			const stations = await api.getStations();
@@ -50,6 +56,30 @@
 
 			// Update progress bar every 500ms
 			progressInterval = setInterval(updateProgress, 500);
+
+			// Set up audio element event listeners for Media Session API
+			const setupAudioListeners = () => {
+				if (!audioElement) {
+					setTimeout(setupAudioListeners, 100);
+					return;
+				}
+
+				// Update media session playback state on play/pause
+				audioElement.addEventListener('play', () => {
+					if (mediaSession) {
+						mediaSession.playbackState = 'playing';
+						}
+				});
+
+				audioElement.addEventListener('pause', () => {
+					if (mediaSession) {
+						mediaSession.playbackState = 'paused';
+						}
+				});
+
+				};
+
+			setupAudioListeners();
 
 			loading = false;
 		} catch (e) {
@@ -78,6 +108,9 @@
 				currentTrackId = np.track.id;
 				nowPlaying = np;
 
+				// Update media session metadata for new track
+				updateMediaSession();
+
 				// Wait a tick for the DOM to update with new audio element
 				await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -91,9 +124,82 @@
 		}
 	}
 
+	function setupMediaSession() {
+		if (!mediaSession) return;
+
+		// Set up media controls for notification center
+		mediaSession.setActionHandler('play', () => {
+			if (audioElement) {
+				audioElement.play();
+			}
+		});
+
+		mediaSession.setActionHandler('pause', () => {
+			if (audioElement) {
+				audioElement.pause();
+			}
+		});
+
+		// Disable seek controls - this is a live radio stream
+		mediaSession.setActionHandler('seekbackward', null);
+		mediaSession.setActionHandler('seekforward', null);
+		mediaSession.setActionHandler('seekto', null);
+
+		// Disable previous/next (could be added later for station history)
+		mediaSession.setActionHandler('previoustrack', null);
+		mediaSession.setActionHandler('nexttrack', null);
+	}
+
+	async function updateMediaSession() {
+		if (!mediaSession || !nowPlaying) return;
+
+		const coverUrl = nowPlaying.track.albumArt
+			? (nowPlaying.track.albumArt.startsWith('http')
+				? nowPlaying.track.albumArt
+				: `${window.location.origin}${nowPlaying.track.albumArt}`)
+			: `${window.location.origin}/api/v1/navidrome/cover/${nowPlaying.track.id}`;
+
+		try {
+			// Fetch the image and create a blob URL for better compatibility
+			const response = await fetch(coverUrl);
+
+			if (!response.ok) {
+				throw new Error('Failed to fetch cover');
+			}
+
+			const blob = await response.blob();
+			const blobUrl = URL.createObjectURL(blob);
+
+			mediaSession.metadata = new MediaMetadata({
+				title: nowPlaying.track.title,
+				artist: nowPlaying.track.artist,
+				album: nowPlaying.track.album || station?.name || 'Navidrome Radio',
+				artwork: [
+					{ src: blobUrl, sizes: '96x96', type: blob.type },
+					{ src: blobUrl, sizes: '128x128', type: blob.type },
+					{ src: blobUrl, sizes: '192x192', type: blob.type },
+					{ src: blobUrl, sizes: '256x256', type: blob.type },
+					{ src: blobUrl, sizes: '384x384', type: blob.type },
+					{ src: blobUrl, sizes: '512x512', type: blob.type }
+				]
+			});
+		} catch {
+			// Fallback to direct URL if blob fetch fails
+			mediaSession.metadata = new MediaMetadata({
+				title: nowPlaying.track.title,
+				artist: nowPlaying.track.artist,
+				album: nowPlaying.track.album || station?.name || 'Navidrome Radio',
+				artwork: [
+					{ src: coverUrl, sizes: '512x512', type: 'image/jpeg' }
+				]
+			});
+		}
+
+		mediaSession.playbackState = audioElement?.paused ? 'paused' : 'playing';
+	}
+
 	function syncAudioPosition(np: NowPlaying) {
 		if (!audioElement) {
-			console.log('No audio element yet, retrying in 100ms...');
 			setTimeout(() => syncAudioPosition(np), 100);
 			return;
 		}
@@ -102,84 +208,46 @@
 		const now = Date.now();
 		const elapsedSeconds = (now - startedAt) / 1000;
 
-		console.log(`Syncing audio: track started ${elapsedSeconds.toFixed(1)}s ago, readyState: ${audioElement.readyState}`);
-
-		// Function to actually set the position
 		const setPosition = () => {
 			if (!audioElement) return;
 
 			if (elapsedSeconds >= 0 && elapsedSeconds < np.track.duration) {
-				console.log(`Setting audio position to ${elapsedSeconds.toFixed(1)}s`);
-
 				try {
 					audioElement.currentTime = elapsedSeconds;
-
-					// Verify the seek worked
-					setTimeout(() => {
-						if (audioElement) {
-							console.log(`Verified audio position: ${audioElement.currentTime.toFixed(1)}s`);
-						}
-					}, 50);
-
-					// Try to start playing based on saved preference
 					audioElement.muted = isMuted;
 					audioElement.volume = 1.0;
 
 					audioElement.play().then(() => {
-						if (isMuted) {
-							console.log('Playing muted (user preference)');
-							autoplayBlocked = false;
-						} else {
-							console.log('Autoplay succeeded - playing unmuted');
-							autoplayBlocked = false;
-						}
-					}).catch((err) => {
-						console.log('Autoplay blocked by browser:', err.message);
+						autoplayBlocked = false;
+					}).catch(() => {
 						// Browser blocked autoplay, must start muted
 						if (audioElement) {
-							const userWantedUnmuted = !isMuted; // Remember user's preference
+							const userWantedUnmuted = !isMuted;
 							audioElement.muted = true;
-
-							// Set visual state but DON'T save preference
 							isMuted = true;
 
 							audioElement.play().then(() => {
-								console.log('Playing muted due to autoplay policy');
-
-								// If user wanted it unmuted, show clear prompt
 								if (userWantedUnmuted) {
 									needsUserInteraction = true;
-									console.log('User wanted audio unmuted - showing interaction prompt');
 								}
-							}).catch(() => {
-								console.error('Failed to start even muted playback');
 							});
 						}
 					});
 				} catch (err) {
 					console.error('Error setting audio position:', err);
 				}
-			} else {
-				console.warn(`Invalid elapsed time: ${elapsedSeconds}s for duration ${np.track.duration}s`);
 			}
 		};
 
-		// If metadata is already loaded, set position immediately
 		if (audioElement.readyState >= 2) {
-			console.log('Audio ready (readyState >= 2), setting position now');
 			setPosition();
 		} else {
-			console.log('Waiting for audio to be ready...');
-
-			// Set up event listeners
 			const onLoadedData = () => {
-				console.log('Audio loadeddata event fired, readyState:', audioElement?.readyState);
 				setPosition();
 				cleanup();
 			};
 
 			const onCanPlay = () => {
-				console.log('Audio canplay event fired, readyState:', audioElement?.readyState);
 				setPosition();
 				cleanup();
 			};
@@ -192,10 +260,8 @@
 			audioElement.addEventListener('loadeddata', onLoadedData, { once: true });
 			audioElement.addEventListener('canplay', onCanPlay, { once: true });
 
-			// Timeout fallback
 			setTimeout(() => {
 				if (audioElement && audioElement.readyState < 2) {
-					console.log('Timeout waiting for audio ready, trying anyway...');
 					setPosition();
 					cleanup();
 				}
@@ -220,20 +286,10 @@
 	}
 
 	async function handleSkip() {
-		if (!station) return;
-
-		console.log('Skip button clicked, isAdmin:', authStore.isAdmin);
-
-		if (!authStore.isAdmin) {
-			console.error('User is not admin');
-			return;
-		}
+		if (!station || !authStore.isAdmin) return;
 
 		try {
-			console.log('Calling skipTrack API for station:', station.id);
 			await api.skipTrack(station.id);
-			console.log('Skip successful, updating now playing');
-			// Force immediate update
 			currentTrackId = null;
 			await updateNowPlaying();
 		} catch (e) {
@@ -247,19 +303,13 @@
 
 		isMuted = !isMuted;
 		audioElement.muted = isMuted;
-		autoplayBlocked = false; // User clicked, so no longer blocked
-		needsUserInteraction = false; // User interacted
+		autoplayBlocked = false;
+		needsUserInteraction = false;
 
-		// Save preference
 		localStorage.setItem('radio_muted', isMuted.toString());
 
-		console.log(`User ${isMuted ? 'muted' : 'unmuted'} audio`);
-
-		// Try to play if unmuting and not playing
 		if (!isMuted && audioElement.paused) {
-			audioElement.play().catch((err) => {
-				console.error('Failed to start playback:', err);
-			});
+			audioElement.play();
 		}
 	}
 
@@ -270,14 +320,9 @@
 		isMuted = false;
 		audioElement.muted = false;
 
-		// Ensure we're playing
 		if (audioElement.paused) {
-			audioElement.play().catch((err) => {
-				console.error('Failed to resume playback:', err);
-			});
+			audioElement.play();
 		}
-
-		console.log('User resumed playback unmuted');
 	}
 </script>
 
