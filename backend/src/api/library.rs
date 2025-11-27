@@ -319,20 +319,14 @@ async fn get_tracks_by_ids(
     // Limit to 500 IDs max
     let ids: Vec<String> = req.ids.into_iter().take(500).collect();
 
-    // Build query with placeholders
-    let placeholders: Vec<String> = ids.iter().enumerate().map(|(i, _)| format!("${}", i + 1)).collect();
-    let query = format!(
-        "SELECT id, title, artist, album FROM library_index WHERE id IN ({})",
-        placeholders.join(", ")
+    // Build query safely using QueryBuilder
+    let mut qb = sqlx::QueryBuilder::new(
+        "SELECT id, title, artist, album FROM library_index WHERE id IN ("
     );
+    qb.separated(", ").push_bindings(&ids);
+    qb.push(")");
 
-    let mut query_builder = sqlx::query(&query);
-    for id in &ids {
-        query_builder = query_builder.bind(id);
-    }
-
-    let rows = query_builder.fetch_all(&state.db).await?;
-
+    let rows = qb.build().fetch_all(&state.db).await?;
     let tracks: Vec<TrackDetails> = rows
         .iter()
         .map(|row| {
