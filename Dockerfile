@@ -34,10 +34,15 @@ COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/src ./src
 COPY backend/migrations ./migrations
 
+# Copy sqlx offline query cache for offline compilation
+COPY backend/.sqlx ./.sqlx
+
 # Copy built frontend into backend's expected location
 COPY --from=frontend-builder /app/frontend/build ../frontend/build
 
 # Build backend for release (frontend will be embedded)
+# SQLX_OFFLINE enables using cached queries without a live database
+ENV SQLX_OFFLINE=true
 RUN cargo build --release
 
 # Stage 3: Runtime
