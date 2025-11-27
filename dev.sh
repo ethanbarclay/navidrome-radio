@@ -125,14 +125,9 @@ case "$ACTION" in
     echo "Usage: ./dev.sh [command]"
     echo ""
     echo "Commands:"
-    echo "  run      - Run the application (default)"
+    echo "  run      - Run the application (builds if needed)"
     echo "  build    - Build frontend and backend"
     echo "  clean    - Clean build artifacts"
     echo "  rebuild  - Clean and build from scratch"
-    echo ""
-    echo "Examples:"
-    echo "  ./dev.sh          # Run the app"
-    echo "  ./dev.sh build    # Build everything"
-    echo "  ./dev.sh rebuild  # Clean rebuild"
     ;;
 esac

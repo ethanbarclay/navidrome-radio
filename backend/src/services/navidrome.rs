@@ -34,6 +34,23 @@ struct SearchResult3Data {
 }
 
 #[derive(Debug, Deserialize)]
+struct RandomSongsResponse {
+    #[serde(rename = "randomSongs")]
+    random_songs: RandomSongsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct RandomSongsData {
+    #[serde(default)]
+    song: Vec<NavidromeSong>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetSongResponse {
+    song: NavidromeSong,
+}
+
+#[derive(Debug, Deserialize)]
 struct NavidromeGenre {
     name: String,
 }
@@ -158,6 +175,76 @@ impl NavidromeClient {
             .collect())
     }
 
+    /// Get random songs from Navidrome
+    /// This is used to fetch all songs from the library by requesting a large number
+    pub async fn get_random_songs(&self, count: usize) -> Result<Vec<Track>> {
+        let url = format!("{}/rest/getRandomSongs", self.base_url);
+        let params = self.build_params(vec![
+            ("size", &count.to_string()),
+        ]);
+
+        tracing::debug!("Getting {} random songs from Navidrome", count);
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| AppError::Navidrome(format!("Request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::error!("Navidrome API error: {} - {}", status, body);
+            return Err(AppError::Navidrome(format!(
+                "API returned status: {} - {}",
+                status, body
+            )));
+        }
+
+        let response_text = response.text().await.map_err(|e| AppError::Navidrome(format!("Failed to read response: {}", e)))?;
+
+        tracing::debug!("Navidrome response: {}", &response_text[..std::cmp::min(500, response_text.len())]);
+
+        let data: SubsonicResponse<RandomSongsResponse> = serde_json::from_str(&response_text)
+            .map_err(|e| AppError::Navidrome(format!("Failed to parse response: {} - Response: {}", e, &response_text[..std::cmp::min(200, response_text.len())])))?;
+
+        tracing::debug!("Found {} songs in response", data.subsonic_response.random_songs.song.len());
+
+        Ok(self.convert_navidrome_songs(data.subsonic_response.random_songs.song))
+    }
+
+    /// Convert NavidromeSong objects to Track objects
+    fn convert_navidrome_songs(&self, songs: Vec<NavidromeSong>) -> Vec<Track> {
+        songs
+            .into_iter()
+            .map(|song| {
+                // Prefer the new genres array, fall back to old genre string
+                let genres = if !song.genres.is_empty() {
+                    song.genres.into_iter().map(|g| g.name).collect()
+                } else if !song.genre.is_empty() {
+                    vec![song.genre]
+                } else {
+                    vec![]
+                };
+
+                Track {
+                    id: song.id,
+                    title: song.title,
+                    artist: song.artist,
+                    album: song.album,
+                    genre: genres,
+                    year: song.year,
+                    duration: song.duration,
+                    path: song.path,
+                    metadata: None,
+                    last_synced: Utc::now(),
+                }
+            })
+            .collect()
+    }
+
     pub async fn get_stream_url(&self, track_id: &str) -> String {
         format!(
             "{}/rest/stream?id={}&u={}&t={}&s={}&v=1.16.1&c=navidrome-radio",
@@ -195,5 +282,68 @@ impl NavidromeClient {
             "Blues".to_string(),
             "Country".to_string(),
         ])
+    }
+
+    /// Get a single track by ID
+    pub async fn get_track(&self, track_id: &str) -> Result<Track> {
+        let url = format!("{}/rest/getSong", self.base_url);
+        let params = self.build_params(vec![("id", track_id)]);
+
+        tracing::debug!("Getting track from Navidrome: {}", track_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| AppError::Navidrome(format!("Request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::error!("Navidrome API error: {} - {}", status, body);
+            return Err(AppError::Navidrome(format!(
+                "API returned status: {} - {}",
+                status, body
+            )));
+        }
+
+        let response_text = response.text().await.map_err(|e| {
+            AppError::Navidrome(format!("Failed to read response: {}", e))
+        })?;
+
+        let data: SubsonicResponse<GetSongResponse> = serde_json::from_str(&response_text)
+            .map_err(|e| {
+                AppError::Navidrome(format!(
+                    "Failed to parse response: {} - Response: {}",
+                    e,
+                    &response_text[..std::cmp::min(200, response_text.len())]
+                ))
+            })?;
+
+        let song = data.subsonic_response.song;
+
+        // Convert to Track
+        let genres = if !song.genres.is_empty() {
+            song.genres.into_iter().map(|g| g.name).collect()
+        } else if !song.genre.is_empty() {
+            vec![song.genre]
+        } else {
+            vec![]
+        };
+
+        Ok(Track {
+            id: song.id,
+            title: song.title,
+            artist: song.artist,
+            album: song.album,
+            genre: genres,
+            year: song.year,
+            duration: song.duration,
+            path: song.path,
+            metadata: None,
+            last_synced: Utc::now(),
+        })
     }
 }

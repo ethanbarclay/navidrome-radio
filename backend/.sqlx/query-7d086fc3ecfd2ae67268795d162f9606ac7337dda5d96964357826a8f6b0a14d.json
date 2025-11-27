@@ -1,0 +1,110 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                total_tracks, total_artists, total_albums,\n                genre_distribution, artist_distribution,\n                earliest_year, latest_year, year_distribution,\n                mood_distribution, avg_energy, avg_tempo, avg_valence,\n                song_type_distribution, total_ai_analyzed, ai_analysis_percentage,\n                computed_at\n            FROM library_stats\n            ORDER BY computed_at DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total_tracks",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_artists",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_albums",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "genre_distribution",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "artist_distribution",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "earliest_year",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "latest_year",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "year_distribution",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "mood_distribution",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "avg_energy",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 10,
+        "name": "avg_tempo",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "avg_valence",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "song_type_distribution",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 13,
+        "name": "total_ai_analyzed",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "ai_analysis_percentage",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 15,
+        "name": "computed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7d086fc3ecfd2ae67268795d162f9606ac7337dda5d96964357826a8f6b0a14d"
+}

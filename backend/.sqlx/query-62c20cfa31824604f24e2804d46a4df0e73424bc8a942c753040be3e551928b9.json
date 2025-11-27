@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT analyzed_filters, semantic_intent\n            FROM ai_query_cache\n            WHERE query_hash = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "analyzed_filters",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "semantic_intent",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "62c20cfa31824604f24e2804d46a4df0e73424bc8a942c753040be3e551928b9"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO library_index (\n                id, title, artist, album, year, duration, genres, last_synced\n            )\n            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())\n            ON CONFLICT (id) DO UPDATE SET\n                title = EXCLUDED.title,\n                artist = EXCLUDED.artist,\n                album = EXCLUDED.album,\n                year = EXCLUDED.year,\n                duration = EXCLUDED.duration,\n                genres = EXCLUDED.genres,\n                last_synced = NOW()\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "319f3d219e53629315595962c4b9bb2952abdaf21cc797378bb09d80351555ff"
+}

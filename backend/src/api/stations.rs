@@ -1,15 +1,21 @@
 use crate::api::middleware::{RequireAdmin, RequireAuth};
 use crate::error::{AppError, Result};
-use crate::models::{CreateStationRequest, NowPlaying, Station, UpdateStationRequest};
-use crate::services::{AuthService, CurationEngine, StationManager};
+use crate::models::{CreateStationRequest, CurationProgress, NowPlaying, Station, UpdateStationRequest};
+use crate::services::{
+    library_indexer::LibraryIndexer, AiCurator, AuthService, CurationEngine, StationManager,
+};
 use axum::{
     extract::{Path, State},
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
+use futures::{stream::Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 use validator::Validate;
 
@@ -18,6 +24,8 @@ pub struct AppState {
     pub auth_service: Arc<AuthService>,
     pub station_manager: Arc<StationManager>,
     pub curation_engine: Arc<CurationEngine>,
+    pub library_indexer: Arc<LibraryIndexer>,
+    pub ai_curator: Option<Arc<AiCurator>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,8 +54,10 @@ pub fn station_routes() -> Router<Arc<AppState>> {
         .route("/stations/:id/stop", post(stop_station))
         .route("/stations/:id/skip", post(skip_track))
         .route("/stations/:id/nowplaying", get(now_playing))
+        .route("/stations/:id/tracks", get(get_station_tracks))
         .route("/ai/capabilities", get(ai_capabilities))
         .route("/ai/analyze-description", post(analyze_description))
+        .route("/ai/curate", post(curate_tracks_sse))
 }
 
 async fn list_stations(State(state): State<Arc<AppState>>) -> Result<Json<Vec<Station>>> {
@@ -79,6 +89,10 @@ async fn create_station(
     req.validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
 
+    // Debug: Log incoming track_ids
+    let track_count = req.track_ids.as_ref().map(|t| t.len()).unwrap_or(0);
+    tracing::info!("Creating station '{}' with {} track_ids", req.name, track_count);
+
     // Check if path is unique
     let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM stations WHERE path = $1)")
         .bind(&req.path)
@@ -90,11 +104,12 @@ async fn create_station(
     }
 
     let config = req.config.unwrap_or_default();
+    let track_ids = req.track_ids.unwrap_or_default();
 
     let station = sqlx::query_as::<_, Station>(
         r#"
-        INSERT INTO stations (path, name, description, genres, mood_tags, created_by, config)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO stations (path, name, description, genres, mood_tags, created_by, config, track_ids)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         "#,
     )
@@ -105,6 +120,7 @@ async fn create_station(
     .bind(serde_json::to_value(&req.mood_tags.unwrap_or_default()).unwrap())
     .bind(claims.sub)
     .bind(serde_json::to_value(&config).unwrap())
+    .bind(serde_json::to_value(&track_ids).unwrap())
     .fetch_one(&state.db)
     .await?;
 
@@ -228,6 +244,131 @@ async fn now_playing(
     Ok(Json(np))
 }
 
+#[derive(Debug, Deserialize)]
+struct GetTracksQuery {
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct StationTrack {
+    id: String,
+    title: String,
+    artist: String,
+    album: String,
+    played_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+struct StationTracksResponse {
+    tracks: Vec<StationTrack>,
+    total: i64,
+}
+
+async fn get_station_tracks(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<GetTracksQuery>,
+) -> Result<Json<StationTracksResponse>> {
+    let limit = query.limit.unwrap_or(50).min(200);
+
+    // First get the station to access its curated track_ids
+    let station = sqlx::query_as::<_, Station>("SELECT * FROM stations WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Station not found".to_string()))?;
+
+    // If station has curated track_ids, show those
+    if !station.track_ids.is_empty() {
+        let track_ids = &station.track_ids;
+        let total = track_ids.len() as i64;
+
+        // Get track details from library_index for the curated tracks
+        // Build a query with placeholders for each track_id
+        if track_ids.is_empty() {
+            return Ok(Json(StationTracksResponse {
+                tracks: vec![],
+                total: 0,
+            }));
+        }
+
+        // Use ANY for array matching
+        let rows = sqlx::query(
+            r#"
+            SELECT id, title, artist, album
+            FROM library_index
+            WHERE id = ANY($1)
+            LIMIT $2
+            "#,
+        )
+        .bind(track_ids)
+        .bind(limit)
+        .fetch_all(&state.db)
+        .await?;
+
+        let tracks: Vec<StationTrack> = rows
+            .iter()
+            .map(|row| {
+                use sqlx::Row;
+                StationTrack {
+                    id: row.get("id"),
+                    title: row.get("title"),
+                    artist: row.get("artist"),
+                    album: row.get("album"),
+                    played_at: None, // Curated tracks haven't been played yet
+                }
+            })
+            .collect();
+
+        return Ok(Json(StationTracksResponse { tracks, total }));
+    }
+
+    // Fallback: Get tracks from playlist_history for stations without curated tracks
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            li.id,
+            li.title,
+            li.artist,
+            li.album,
+            ph.played_at
+        FROM playlist_history ph
+        JOIN library_index li ON ph.track_id = li.id
+        WHERE ph.station_id = $1
+        ORDER BY ph.played_at DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(id)
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+
+    let tracks: Vec<StationTrack> = rows
+        .iter()
+        .map(|row| {
+            use sqlx::Row;
+            StationTrack {
+                id: row.get("id"),
+                title: row.get("title"),
+                artist: row.get("artist"),
+                album: row.get("album"),
+                played_at: row.get("played_at"),
+            }
+        })
+        .collect();
+
+    // Get total count
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM playlist_history WHERE station_id = $1"
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(StationTracksResponse { tracks, total }))
+}
+
 async fn ai_capabilities(State(state): State<Arc<AppState>>) -> Result<Json<AiCapabilities>> {
     let available = state.curation_engine.has_ai_capabilities();
 
@@ -270,4 +411,74 @@ async fn analyze_description(
         tracks_found: tracks.len(),
         sample_tracks,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct CurateRequest {
+    query: String,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+fn default_limit() -> usize {
+    50
+}
+
+#[derive(Debug, Serialize)]
+struct CurationResult {
+    track_ids: Vec<String>,
+}
+
+/// SSE endpoint for AI curation with real-time progress updates
+async fn curate_tracks_sse(
+    State(state): State<Arc<AppState>>,
+    RequireAdmin(_): RequireAdmin,
+    Json(req): Json<CurateRequest>,
+) -> Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
+    let ai_curator = state.ai_curator.clone().ok_or_else(|| {
+        AppError::ExternalApi("AI curation not available (no API key configured)".to_string())
+    })?;
+
+    let query = req.query.clone();
+    let limit = req.limit;
+
+    // Create a channel for progress updates
+    let (progress_tx, progress_rx) = mpsc::channel::<CurationProgress>(32);
+
+    // Spawn the curation task
+    tokio::spawn(async move {
+        let result = ai_curator
+            .curate_tracks_with_progress(query, limit, progress_tx.clone())
+            .await;
+
+        // Send final result or error
+        match result {
+            Ok(track_ids) => {
+                // The completed message is already sent by the curator
+                // But we can send the actual result as a separate event
+                let _ = progress_tx
+                    .send(CurationProgress::Completed {
+                        message: format!("Selected {} tracks", track_ids.len()),
+                        tracks_selected: track_ids.len(),
+                        reasoning: Some(serde_json::to_string(&CurationResult { track_ids }).unwrap_or_default()),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = progress_tx
+                    .send(CurationProgress::Error {
+                        message: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    });
+
+    // Convert the receiver to an SSE stream
+    let stream = ReceiverStream::new(progress_rx).map(|progress| {
+        let data = serde_json::to_string(&progress).unwrap_or_else(|_| "{}".to_string());
+        Ok(Event::default().data(data))
+    });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }

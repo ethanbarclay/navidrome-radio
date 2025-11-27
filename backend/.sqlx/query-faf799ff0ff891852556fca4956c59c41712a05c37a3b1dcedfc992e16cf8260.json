@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE library_index SET\n                mood_tags = $2,\n                energy_level = $3,\n                danceability = $4,\n                valence = $5,\n                song_type = $6,\n                themes = $7,\n                acousticness = $8,\n                instrumentalness = $9,\n                ai_analyzed = true,\n                last_ai_analysis = NOW()\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Float8",
+        "Float8",
+        "Float8",
+        "Jsonb",
+        "Jsonb",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "faf799ff0ff891852556fca4956c59c41712a05c37a3b1dcedfc992e16cf8260"
+}
