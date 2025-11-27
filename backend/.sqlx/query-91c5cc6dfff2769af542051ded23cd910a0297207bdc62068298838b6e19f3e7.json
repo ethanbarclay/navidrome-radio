@@ -1,0 +1,214 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id, title, artist, album, album_artist, composer, year, duration,\n                genres as \"genres!: _\",\n                mood_tags as \"mood_tags!: _\",\n                energy_level, danceability, valence, tempo,\n                song_type as \"song_type!: _\",\n                themes as \"themes!: _\",\n                acousticness, instrumentalness,\n                play_count, skip_count, last_played,\n                user_rating, avg_rating, rating_count,\n                musicbrainz_id, rym_rating, rym_rating_count,\n                lastfm_playcount, lastfm_listeners,\n                ai_analyzed, ai_analysis_version, last_synced, last_ai_analysis\n            FROM library_index\n            WHERE ai_analyzed = false\n            LIMIT $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "artist",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "album",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "album_artist",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "composer",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "year",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "duration",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "genres!: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "mood_tags!: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "energy_level",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 11,
+        "name": "danceability",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 12,
+        "name": "valence",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "tempo",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 14,
+        "name": "song_type!: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 15,
+        "name": "themes!: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 16,
+        "name": "acousticness",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 17,
+        "name": "instrumentalness",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 18,
+        "name": "play_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 19,
+        "name": "skip_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 20,
+        "name": "last_played",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 21,
+        "name": "user_rating",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 22,
+        "name": "avg_rating",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 23,
+        "name": "rating_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 24,
+        "name": "musicbrainz_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 25,
+        "name": "rym_rating",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 26,
+        "name": "rym_rating_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 27,
+        "name": "lastfm_playcount",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 28,
+        "name": "lastfm_listeners",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 29,
+        "name": "ai_analyzed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 30,
+        "name": "ai_analysis_version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 31,
+        "name": "last_synced",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 32,
+        "name": "last_ai_analysis",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "91c5cc6dfff2769af542051ded23cd910a0297207bdc62068298838b6e19f3e7"
+}

@@ -23,10 +23,10 @@ pub struct LibraryTrack {
     // AI-analyzed metadata
     #[sqlx(json)]
     pub mood_tags: Vec<String>,
-    pub energy_level: Option<f32>,
-    pub danceability: Option<f32>,
-    pub valence: Option<f32>,
-    pub tempo: Option<f32>,
+    pub energy_level: Option<f64>,
+    pub danceability: Option<f64>,
+    pub valence: Option<f64>,
+    pub tempo: Option<f64>,
 
     // Categorization
     #[sqlx(json)]
@@ -35,8 +35,8 @@ pub struct LibraryTrack {
     pub themes: Vec<String>,
 
     // Acoustic properties
-    pub acousticness: Option<f32>,
-    pub instrumentalness: Option<f32>,
+    pub acousticness: Option<f64>,
+    pub instrumentalness: Option<f64>,
 
     // Popularity and play metrics
     pub play_count: i32,
@@ -44,13 +44,13 @@ pub struct LibraryTrack {
     pub last_played: Option<DateTime<Utc>>,
 
     // Ratings
-    pub user_rating: Option<f32>,
-    pub avg_rating: Option<f32>,
+    pub user_rating: Option<f64>,
+    pub avg_rating: Option<f64>,
     pub rating_count: i32,
 
     // External metadata
     pub musicbrainz_id: Option<String>,
-    pub rym_rating: Option<f32>,
+    pub rym_rating: Option<f64>,
     pub rym_rating_count: Option<i32>,
     pub lastfm_playcount: Option<i32>,
     pub lastfm_listeners: Option<i32>,
@@ -73,12 +73,12 @@ pub struct LibraryStats {
     pub latest_year: Option<i32>,
     pub year_distribution: serde_json::Value,
     pub mood_distribution: serde_json::Value,
-    pub avg_energy: Option<f32>,
-    pub avg_tempo: Option<f32>,
-    pub avg_valence: Option<f32>,
+    pub avg_energy: Option<f64>,
+    pub avg_tempo: Option<f64>,
+    pub avg_valence: Option<f64>,
     pub song_type_distribution: serde_json::Value,
     pub total_ai_analyzed: i32,
-    pub ai_analysis_percentage: f32,
+    pub ai_analysis_percentage: f64,
     pub computed_at: DateTime<Utc>,
 }
 
@@ -152,13 +152,13 @@ pub struct TrackAnalysisRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackAnalysisResult {
     pub mood_tags: Vec<String>,
-    pub energy_level: Option<f32>,
-    pub danceability: Option<f32>,
-    pub valence: Option<f32>,
+    pub energy_level: Option<f64>,
+    pub danceability: Option<f64>,
+    pub valence: Option<f64>,
     pub song_type: Vec<String>,
     pub themes: Vec<String>,
-    pub acousticness: Option<f32>,
-    pub instrumentalness: Option<f32>,
+    pub acousticness: Option<f64>,
+    pub instrumentalness: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,4 +200,90 @@ pub struct TrackSelectionResult {
     pub selected_tracks: Vec<String>,  // Track IDs
     pub scores: Vec<f32>,  // Relevance scores for each track
     pub reasoning: String,  // AI explanation of selection
+}
+
+/// Progress update for library sync operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum SyncProgress {
+    #[serde(rename = "started")]
+    Started {
+        message: String,
+    },
+    #[serde(rename = "fetching")]
+    Fetching {
+        iteration: usize,
+        message: String,
+    },
+    #[serde(rename = "processing")]
+    Processing {
+        current: usize,
+        total: usize,
+        new_tracks: usize,
+        message: String,
+    },
+    #[serde(rename = "stats")]
+    ComputingStats {
+        message: String,
+    },
+    #[serde(rename = "completed")]
+    Completed {
+        total_tracks: usize,
+        message: String,
+    },
+    #[serde(rename = "error")]
+    Error {
+        message: String,
+    },
+}
+
+/// Progress update for AI curation operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "step")]
+pub enum CurationProgress {
+    #[serde(rename = "started")]
+    Started {
+        query: String,
+        message: String,
+    },
+    #[serde(rename = "checking_cache")]
+    CheckingCache {
+        message: String,
+    },
+    #[serde(rename = "analyzing_library")]
+    AnalyzingLibrary {
+        message: String,
+    },
+    #[serde(rename = "ai_analyzing_query")]
+    AiAnalyzingQuery {
+        message: String,
+        thinking: Option<String>,
+    },
+    #[serde(rename = "searching_tracks")]
+    SearchingTracks {
+        message: String,
+        filters_applied: Option<serde_json::Value>,
+    },
+    #[serde(rename = "ai_selecting_tracks")]
+    AiSelectingTracks {
+        message: String,
+        candidate_count: usize,
+        thinking: Option<String>,
+    },
+    #[serde(rename = "validating")]
+    Validating {
+        message: String,
+        tracks_validated: usize,
+        tracks_rejected: usize,
+    },
+    #[serde(rename = "completed")]
+    Completed {
+        message: String,
+        tracks_selected: usize,
+        reasoning: Option<String>,
+    },
+    #[serde(rename = "error")]
+    Error {
+        message: String,
+    },
 }

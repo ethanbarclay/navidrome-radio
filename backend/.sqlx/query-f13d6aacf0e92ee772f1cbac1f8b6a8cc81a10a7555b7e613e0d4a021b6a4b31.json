@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE library_sync_status SET sync_in_progress = $1, last_sync_error = $2, last_sync_error_at = NOW(), updated_at = NOW() WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f13d6aacf0e92ee772f1cbac1f8b6a8cc81a10a7555b7e613e0d4a021b6a4b31"
+}

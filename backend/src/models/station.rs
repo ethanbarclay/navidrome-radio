@@ -59,6 +59,8 @@ pub struct Station {
     pub active: bool,
     #[sqlx(json)]
     pub config: StationConfig,
+    #[sqlx(json)]
+    pub track_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -73,6 +75,7 @@ pub struct CreateStationRequest {
     pub genres: Vec<String>,
     pub mood_tags: Option<Vec<String>>,
     pub config: Option<StationConfig>,
+    pub track_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -3,7 +3,7 @@ use crate::error::{AppError, Result};
 use crate::models::{SelectionMode, Station, Track};
 use crate::services::navidrome::NavidromeClient;
 use anyhow::anyhow;
-use rand::seq::SliceRandom;
+use rand::{seq::SliceRandom, Rng};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -71,7 +71,7 @@ impl CurationEngine {
         );
 
         let request = ClaudeRequest {
-            model: "claude-3-haiku-20240307".to_string(),
+            model: "claude-3-5-haiku-20241022".to_string(),
             max_tokens: 300,
             messages: vec![ClaudeMessage {
                 role: "user".to_string(),
@@ -242,6 +242,13 @@ impl CurationEngine {
         station: &Station,
         recent_track_ids: &[String],
     ) -> Result<Track> {
+        // If station has curated track_ids, use those instead of genre-based selection
+        if !station.track_ids.is_empty() {
+            tracing::info!("Station '{}' has {} curated tracks, selecting from those", station.name, station.track_ids.len());
+            return self.select_from_curated(station, recent_track_ids).await;
+        }
+        tracing::debug!("Station '{}' has no curated tracks, using genre-based selection", station.name);
+
         match station.config.track_selection_mode {
             SelectionMode::Random | SelectionMode::Hybrid => {
                 self.select_random(station, recent_track_ids).await
@@ -257,6 +264,69 @@ impl CurationEngine {
                 }
             }
         }
+    }
+
+    /// Select a track from the station's curated track_ids list
+    async fn select_from_curated(
+        &self,
+        station: &Station,
+        recent_track_ids: &[String],
+    ) -> Result<Track> {
+        let recent_set: HashSet<_> = recent_track_ids.iter().collect();
+
+        // Filter out recently played tracks
+        let available_ids: Vec<&String> = station
+            .track_ids
+            .iter()
+            .filter(|id| !recent_set.contains(id))
+            .collect();
+
+        // If all tracks have been played recently, reset and use all tracks
+        let mut candidates: Vec<&String> = if available_ids.is_empty() {
+            tracing::info!("All curated tracks played recently, resetting pool");
+            station.track_ids.iter().collect()
+        } else {
+            available_ids
+        };
+
+        // Duration filters
+        let min_dur = station.config.min_track_duration as i32;
+        let max_dur = station.config.max_track_duration as i32;
+
+        // Try to find a valid track, removing invalid ones from candidates
+        let mut tried_ids: HashSet<&String> = HashSet::new();
+
+        while !candidates.is_empty() {
+            // Pick a random track ID from the remaining candidates
+            let idx = rand::thread_rng().gen_range(0..candidates.len());
+            let track_id = candidates[idx];
+
+            // Skip if we've already tried this one
+            if tried_ids.contains(track_id) {
+                candidates.remove(idx);
+                continue;
+            }
+            tried_ids.insert(track_id);
+
+            // Fetch the track details from Navidrome
+            match self.navidrome_client.get_track(track_id).await {
+                Ok(track) => {
+                    // Check duration requirements
+                    if track.duration >= min_dur && track.duration <= max_dur {
+                        tracing::info!("Selected curated track: {} - {}", track.artist, track.title);
+                        return Ok(track);
+                    }
+                    // Track doesn't meet duration requirements, remove from candidates
+                    candidates.remove(idx);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch track {}: {:?}", track_id, e);
+                    candidates.remove(idx);
+                }
+            }
+        }
+
+        Err(AppError::NotFound("No suitable curated tracks found".to_string()))
     }
 
     async fn select_random(

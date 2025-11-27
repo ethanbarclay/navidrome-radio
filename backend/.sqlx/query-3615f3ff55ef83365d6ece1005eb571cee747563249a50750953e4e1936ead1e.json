@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE library_sync_status SET tracks_analyzed = $1 WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3615f3ff55ef83365d6ece1005eb571cee747563249a50750953e4e1936ead1e"
+}

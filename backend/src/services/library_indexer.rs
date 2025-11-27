@@ -31,7 +31,8 @@ impl LibraryIndexer {
     }
 
     /// Perform a full sync of the library from Navidrome
-    pub async fn sync_full(&self) -> Result<()> {
+    /// If progress_tx is provided, sends progress updates via the channel
+    pub async fn sync_full(&self, progress_tx: Option<tokio::sync::broadcast::Sender<crate::models::SyncProgress>>) -> Result<()> {
         info!("Starting full library sync from Navidrome");
 
         // Check if sync is already in progress
@@ -44,53 +45,128 @@ impl LibraryIndexer {
         // Mark sync as in progress
         self.update_sync_status(true, None).await?;
 
-        match self.perform_full_sync().await {
-            Ok(()) => {
+        match self.perform_full_sync(progress_tx.clone()).await {
+            Ok(total_tracks) => {
                 info!("Full library sync completed successfully");
                 self.update_sync_status(false, None).await?;
-                self.update_library_stats().await?;
+
+                // Send completed event
+                if let Some(tx) = &progress_tx {
+                    let _ = tx.send(crate::models::SyncProgress::Completed {
+                        total_tracks,
+                        message: format!("Library sync completed successfully. {} tracks synced.", total_tracks),
+                    });
+                }
+
+                // Update stats in background (don't block completion)
+                info!("Library sync complete. Stats computation will run in background.");
+                let db_clone = self.db.clone();
+                let progress_tx_clone = progress_tx;
+                tokio::spawn(async move {
+                    info!("Computing library statistics...");
+
+                    // Send computing stats event
+                    if let Some(tx) = &progress_tx_clone {
+                        let _ = tx.send(crate::models::SyncProgress::ComputingStats {
+                            message: "Computing library statistics...".to_string(),
+                        });
+                    }
+
+                    match sqlx::query!("SELECT update_library_stats()")
+                        .execute(&db_clone)
+                        .await
+                    {
+                        Ok(_) => info!("Library statistics updated successfully"),
+                        Err(e) => error!("Failed to update library statistics: {}", e),
+                    }
+                });
+
                 Ok(())
             }
             Err(e) => {
                 error!("Full library sync failed: {}", e);
                 self.update_sync_status(false, Some(e.to_string())).await?;
+
+                // Send error event
+                if let Some(tx) = &progress_tx {
+                    let _ = tx.send(crate::models::SyncProgress::Error {
+                        message: format!("Sync failed: {}", e),
+                    });
+                }
+
                 Err(e)
             }
         }
     }
 
-    async fn perform_full_sync(&self) -> Result<()> {
-        // Get all songs from Navidrome using search with wildcard
-        // We'll use multiple queries to get all tracks in chunks
-        let mut offset = 0;
-        let limit = 500;
+    async fn perform_full_sync(&self, progress_tx: Option<tokio::sync::broadcast::Sender<crate::models::SyncProgress>>) -> Result<usize> {
+        // Get all songs from Navidrome using getRandomSongs
+        // We request a large number to get all songs (most libraries have < 50000 tracks)
+        // Note: This is a workaround since search3 doesn't support wildcards properly
+        let batch_size = 5000;
+        let max_iterations = 20; // Max 100,000 tracks (20 * 5000)
+        let mut all_track_ids = std::collections::HashSet::new();
         let mut total_synced = 0;
 
-        loop {
-            // Search for tracks (using "*" to get all)
+        info!("Starting full library sync using random song batches");
+
+        // Fetch songs in batches until we stop getting new unique tracks
+        for iteration in 0..max_iterations {
+            // Send fetching event
+            if let Some(tx) = &progress_tx {
+                let _ = tx.send(crate::models::SyncProgress::Fetching {
+                    iteration: iteration + 1,
+                    message: format!("Fetching batch {} from Navidrome...", iteration + 1),
+                });
+            }
+
             let tracks = self
                 .navidrome_client
-                .search_tracks("*", limit)
+                .get_random_songs(batch_size)
                 .await
                 .unwrap_or_else(|e| {
-                    warn!("Failed to fetch tracks at offset {}: {}", offset, e);
+                    warn!("Failed to fetch tracks in iteration {}: {}", iteration, e);
                     Vec::new()
                 });
 
             if tracks.is_empty() {
+                warn!("No tracks returned from Navidrome");
                 break;
             }
 
-            info!("Syncing {} tracks (offset: {})", tracks.len(), offset);
+            let mut new_tracks_count = 0;
 
-            // Insert/update tracks in library_index
+            // Only upsert tracks we haven't seen before
             for track in &tracks {
-                if let Err(e) = self.upsert_track(track).await {
-                    warn!("Failed to upsert track {}: {}", track.id, e);
+                if all_track_ids.insert(track.id.clone()) {
+                    if let Err(e) = self.upsert_track(track).await {
+                        warn!("Failed to upsert track {}: {}", track.id, e);
+                    } else {
+                        new_tracks_count += 1;
+                    }
                 }
             }
 
-            total_synced += tracks.len();
+            total_synced = all_track_ids.len();
+
+            info!(
+                "Iteration {}: Fetched {} tracks, {} new, {} total unique",
+                iteration + 1,
+                tracks.len(),
+                new_tracks_count,
+                total_synced
+            );
+
+            // Send processing event
+            if let Some(tx) = &progress_tx {
+                let _ = tx.send(crate::models::SyncProgress::Processing {
+                    current: total_synced,
+                    total: total_synced, // We don't know the total yet
+                    new_tracks: new_tracks_count,
+                    message: format!("Processed batch {}: {} total tracks ({} new)", iteration + 1, total_synced, new_tracks_count),
+                });
+            }
+
             sqlx::query!(
                 "UPDATE library_sync_status SET tracks_synced = $1 WHERE id = 1",
                 total_synced as i32
@@ -98,15 +174,14 @@ impl LibraryIndexer {
             .execute(&self.db)
             .await?;
 
-            // If we got fewer tracks than the limit, we're done
-            if tracks.len() < limit {
+            // If we got very few new tracks (< 5% of batch), we likely have them all
+            if new_tracks_count < batch_size / 20 {
+                info!("Got {} new tracks (< 5% of batch size), assuming we have all tracks", new_tracks_count);
                 break;
             }
-
-            offset += limit;
         }
 
-        info!("Synced {} total tracks", total_synced);
+        info!("Synced {} total unique tracks", total_synced);
 
         // Update sync timestamp
         sqlx::query!(
@@ -116,7 +191,7 @@ impl LibraryIndexer {
         .execute(&self.db)
         .await?;
 
-        Ok(())
+        Ok(total_synced)
     }
 
     async fn upsert_track(&self, track: &crate::models::Track) -> Result<()> {
@@ -166,11 +241,11 @@ impl LibraryIndexer {
             r#"
             SELECT
                 id, title, artist, album, album_artist, composer, year, duration,
-                genres as "genres: sqlx::types::Json<Vec<String>>",
-                mood_tags as "mood_tags: sqlx::types::Json<Vec<String>>",
+                genres as "genres!: _",
+                mood_tags as "mood_tags!: _",
                 energy_level, danceability, valence, tempo,
-                song_type as "song_type: sqlx::types::Json<Vec<String>>",
-                themes as "themes: sqlx::types::Json<Vec<String>>",
+                song_type as "song_type!: _",
+                themes as "themes!: _",
                 acousticness, instrumentalness,
                 play_count, skip_count, last_played,
                 user_rating, avg_rating, rating_count,
@@ -204,7 +279,7 @@ impl LibraryIndexer {
                     title: track.title.clone(),
                     artist: track.artist.clone(),
                     album: track.album.clone(),
-                    genres: track.genres.0.clone(),
+                    genres: track.genres.clone(),
                     year: track.year,
                 };
 
@@ -288,7 +363,7 @@ impl LibraryIndexer {
         Ok(())
     }
 
-    async fn get_sync_status(&self) -> Result<LibrarySyncStatus> {
+    pub async fn get_sync_status(&self) -> Result<LibrarySyncStatus> {
         let status = sqlx::query_as!(
             LibrarySyncStatus,
             r#"
@@ -436,7 +511,7 @@ Respond with ONLY a JSON object in this exact format:
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&serde_json::json!({
-                "model": "claude-3-5-sonnet-20241022",
+                "model": "claude-sonnet-4-5-20250929",
                 "max_tokens": 1024,
                 "messages": [{
                     "role": "user",
@@ -457,8 +532,17 @@ Respond with ONLY a JSON object in this exact format:
             .as_str()
             .ok_or_else(|| AppError::ExternalApi("Invalid response format from Claude".to_string()))?;
 
+        // Strip markdown code fences if present (Claude sometimes wraps JSON in ```json ... ```)
+        let json_text = content_text
+            .trim()
+            .strip_prefix("```json")
+            .or_else(|| content_text.trim().strip_prefix("```"))
+            .map(|s| s.strip_suffix("```").unwrap_or(s))
+            .unwrap_or(content_text)
+            .trim();
+
         // Parse the JSON from the text content
-        let analysis: TrackAnalysisResult = serde_json::from_str(content_text)
+        let analysis: TrackAnalysisResult = serde_json::from_str(json_text)
             .map_err(|e| AppError::ExternalApi(format!("Failed to parse analysis JSON: {}", e)))?;
 
         Ok(analysis)

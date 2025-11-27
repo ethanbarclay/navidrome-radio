@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO ai_query_cache (query_hash, original_query, analyzed_filters, semantic_intent, ai_model_version)\n            VALUES ($1, $2, $3, $4, 'claude-sonnet-4-5-20250929')\n            ON CONFLICT (query_hash) DO UPDATE SET\n                last_used = NOW(),\n                use_count = ai_query_cache.use_count + 1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a1726aa6776b93acff8b8ae8c56926d5ce7ebed34f7512070dd260ce520950c"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT update_library_stats()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "update_library_stats",
+        "type_info": "Void"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "69dda5acb55224e846cbbb135eae4168a9c1981d3aba6ffef731162e15b37c6a"
+}

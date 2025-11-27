@@ -1,10 +1,11 @@
 use crate::error::{AppError, Result};
 use crate::models::{
-    LibraryStats, LibraryTrack, QueryAnalysisRequest, QueryAnalysisResult, QueryFilters,
-    TrackSelectionRequest, TrackSelectionResult,
+    CurationProgress, LibraryStats, LibraryTrack, QueryAnalysisRequest, QueryAnalysisResult,
+    QueryFilters, TrackSelectionRequest, TrackSelectionResult,
 };
 use sqlx::PgPool;
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Multi-layered AI music curator
@@ -30,34 +31,103 @@ impl AiCurator {
     /// 2. Analyze query to extract filters
     /// 3. Select and rank specific tracks
     pub async fn curate_tracks(&self, query: String, limit: usize) -> Result<Vec<String>> {
+        // Use the progress version but discard the receiver
+        let (tx, _rx) = mpsc::channel(10);
+        self.curate_tracks_with_progress(query, limit, tx).await
+    }
+
+    /// Curate tracks with progress updates via the provided channel
+    pub async fn curate_tracks_with_progress(
+        &self,
+        query: String,
+        limit: usize,
+        progress_tx: mpsc::Sender<CurationProgress>,
+    ) -> Result<Vec<String>> {
         info!("Curating tracks for query: {}", query);
 
+        // Helper to send progress (ignoring errors if receiver dropped)
+        let send_progress = |p: CurationProgress| {
+            let tx = progress_tx.clone();
+            async move { let _ = tx.send(p).await; }
+        };
+
+        send_progress(CurationProgress::Started {
+            query: query.clone(),
+            message: "Starting AI curation...".to_string(),
+        }).await;
+
         // Check cache first
+        send_progress(CurationProgress::CheckingCache {
+            message: "Checking for cached analysis...".to_string(),
+        }).await;
+
         let query_hash = format!("{:x}", md5::compute(&query));
         if let Some(cached) = self.get_cached_query(&query_hash).await? {
             info!("Using cached query analysis");
 
-            // Get matching tracks using cached filters
-            let tracks = self.get_matching_tracks(&cached.filters, limit * 3).await?;
+            send_progress(CurationProgress::SearchingTracks {
+                message: "Found cached analysis, searching for matching tracks...".to_string(),
+                filters_applied: Some(serde_json::to_value(&cached.filters).unwrap_or_default()),
+            }).await;
 
-            if tracks.len() >= limit {
-                // Use AI for final selection
-                return self.ai_select_tracks(&cached.filters, tracks, limit).await;
+            // Get matching tracks using cached filters (cap to avoid API rate limits)
+            let max_candidates = 100;  // Keep low to avoid rate limits
+            let tracks = self.get_matching_tracks(&cached.filters, max_candidates).await?;
+
+            // If we found tracks with cached filters, use them (skip Layer 2)
+            if !tracks.is_empty() {
+                let actual_limit = std::cmp::min(limit, tracks.len());
+
+                send_progress(CurationProgress::AiSelectingTracks {
+                    message: "AI is selecting the best tracks...".to_string(),
+                    candidate_count: tracks.len(),
+                    thinking: Some("Analyzing track relevance to your query".to_string()),
+                }).await;
+
+                // Use AI for final selection with original query for strict matching
+                let result = self.ai_select_tracks(&query, tracks, actual_limit).await?;
+
+                send_progress(CurationProgress::Completed {
+                    message: "Curation complete!".to_string(),
+                    tracks_selected: result.len(),
+                    reasoning: None,
+                }).await;
+
+                return Ok(result);
             }
         }
 
         // Layer 1: Get library context
+        send_progress(CurationProgress::AnalyzingLibrary {
+            message: "Analyzing your music library...".to_string(),
+        }).await;
+
         let library_stats = self.get_library_context().await?;
 
         // Layer 2: Analyze query with AI to extract filters
+        send_progress(CurationProgress::AiAnalyzingQuery {
+            message: "AI is analyzing your request...".to_string(),
+            thinking: Some(format!(
+                "Understanding '{}' and finding matching genres/moods",
+                query
+            )),
+        }).await;
+
         let analysis = self.analyze_query_with_ai(query.clone(), library_stats).await?;
 
         // Cache the analysis
         self.cache_query_analysis(&query_hash, &query, &analysis).await?;
 
         // Get candidate tracks matching the filters
+        send_progress(CurationProgress::SearchingTracks {
+            message: format!("Searching for {} tracks...", analysis.semantic_intent),
+            filters_applied: Some(serde_json::to_value(&analysis.filters).unwrap_or_default()),
+        }).await;
+
+        // Cap candidates to avoid hitting API rate limits (100 track descriptions max)
+        let max_candidates = 100;
         let candidate_tracks = self
-            .get_matching_tracks(&analysis.filters, limit * 3)
+            .get_matching_tracks(&analysis.filters, max_candidates)
             .await?;
 
         info!(
@@ -67,13 +137,45 @@ impl AiCurator {
 
         if candidate_tracks.is_empty() {
             warn!("No tracks found matching filters, using fallback");
+            send_progress(CurationProgress::SearchingTracks {
+                message: "No exact matches found, using broader search...".to_string(),
+                filters_applied: None,
+            }).await;
             // Fallback: just get random tracks from library
-            return self.get_random_tracks(limit).await;
+            let result = self.get_random_tracks(limit).await?;
+
+            send_progress(CurationProgress::Completed {
+                message: "Curation complete (using random selection)".to_string(),
+                tracks_selected: result.len(),
+                reasoning: Some("No exact matches found for your query".to_string()),
+            }).await;
+
+            return Ok(result);
         }
 
-        // Layer 3: Use AI to select and rank the best tracks
-        self.ai_select_tracks(&analysis.filters, candidate_tracks, limit)
-            .await
+        // Layer 3: Use AI to select and rank the best tracks (with strict matching)
+        send_progress(CurationProgress::AiSelectingTracks {
+            message: "AI is selecting and validating tracks...".to_string(),
+            candidate_count: candidate_tracks.len(),
+            thinking: Some(format!(
+                "Strictly filtering {} candidates to find genuine matches for '{}'",
+                candidate_tracks.len(),
+                query
+            )),
+        }).await;
+
+        let result = self.ai_select_tracks(&query, candidate_tracks, limit).await?;
+
+        send_progress(CurationProgress::Completed {
+            message: "Curation complete!".to_string(),
+            tracks_selected: result.len(),
+            reasoning: Some(format!(
+                "Selected {} tracks that genuinely match your request",
+                result.len()
+            )),
+        }).await;
+
+        Ok(result)
     }
 
     async fn get_library_context(&self) -> Result<LibraryStats> {
@@ -121,11 +223,11 @@ impl AiCurator {
     ) -> Result<QueryAnalysisResult> {
         info!("Analyzing query with AI (Layer 2)");
 
-        // Format library context for AI
+        // Format library context for AI - show more genres so AI has better options
         let top_genres: Vec<String> = library_context
             .genre_distribution
             .as_object()
-            .map(|obj| obj.keys().take(20).map(|k| k.clone()).collect())
+            .map(|obj| obj.keys().take(100).map(|k| k.clone()).collect())
             .unwrap_or_default();
 
         let top_artists: Vec<String> = library_context
@@ -149,22 +251,22 @@ LIBRARY CONTEXT:
 - Total tracks: {}
 - Total artists: {}
 - Year range: {} to {}
-- Top genres: {}
+- Available genres (USE ONLY THESE): {}
 - Top artists: {}
 - Available moods: {}
 - Average energy: {:.2}
 - Average tempo: {:.1} BPM
 - Average valence (happiness): {:.2}
 
-Based on the user's query and what's actually in their library, extract filters that would match appropriate songs.
-Think about:
-1. What genres would match this query given the available genres?
-2. Which specific artists in the library might fit?
-3. What mood tags apply?
-4. What energy level range (0.0-1.0)?
-5. What year range makes sense?
-6. Any tempo preferences?
-7. Valence (happiness) range?
+CRITICAL INSTRUCTIONS:
+1. For genres, ONLY use genres from the "Available genres" list above - don't invent genres!
+2. Include BROAD genre categories in addition to specific ones (e.g., for hip hop: include "Hip Hop", "Rap", "Rap/Hip Hop" AND specific subgenres like "East Coast Hip Hop")
+3. Keep filters LOOSE - it's better to have too many matches (we'll filter later) than too few
+4. Only use year_range if the query specifically mentions a time period
+5. Only use energy_range if the query specifically mentions energy/intensity
+6. Leave filters as null if not relevant to the query
+
+Think about what genres from the available list would match "{}"
 
 Respond with ONLY a JSON object:
 {{
@@ -179,7 +281,7 @@ Respond with ONLY a JSON object:
     "energy_range": [min, max] or null,
     "tempo_range": [min_bpm, max_bpm] or null,
     "valence_range": [min, max] or null,
-    "min_rating": 3.5 or null
+    "min_rating": null
   }},
   "confidence": 0.85
 }}"#,
@@ -194,6 +296,7 @@ Respond with ONLY a JSON object:
             library_context.avg_energy.unwrap_or(0.5),
             library_context.avg_tempo.unwrap_or(120.0),
             library_context.avg_valence.unwrap_or(0.5),
+            query,  // Second instance for "Think about what genres" line
         );
 
         let analysis = self.call_claude(&prompt).await?;
@@ -237,18 +340,27 @@ Respond with ONLY a JSON object:
         }
 
         if let Some((min_energy, max_energy)) = filters.energy_range {
+            // Include tracks with NULL energy_level (not yet analyzed)
             query_parts.push(format!(
-                "AND energy_level BETWEEN {} AND {}",
+                "AND (energy_level IS NULL OR energy_level BETWEEN {} AND {})",
                 min_energy, max_energy
             ));
         }
 
         if let Some((min_year, max_year)) = filters.year_range {
-            query_parts.push(format!("AND year BETWEEN {} AND {}", min_year, max_year));
+            // Include tracks with NULL year
+            query_parts.push(format!(
+                "AND (year IS NULL OR year BETWEEN {} AND {})",
+                min_year, max_year
+            ));
         }
 
         if let Some(min_rating) = filters.min_rating {
-            query_parts.push(format!("AND avg_rating >= {}", min_rating));
+            // Include tracks with NULL rating
+            query_parts.push(format!(
+                "AND (avg_rating IS NULL OR avg_rating >= {})",
+                min_rating
+            ));
         }
 
         query_parts.push(format!("LIMIT {}", limit));
@@ -267,7 +379,7 @@ Respond with ONLY a JSON object:
 
     async fn ai_select_tracks(
         &self,
-        filters: &QueryFilters,
+        original_query: &str,
         candidates: Vec<LibraryTrack>,
         limit: usize,
     ) -> Result<Vec<String>> {
@@ -276,10 +388,6 @@ Respond with ONLY a JSON object:
             limit,
             candidates.len()
         );
-
-        if candidates.len() <= limit {
-            return Ok(candidates.into_iter().map(|t| t.id).collect());
-        }
 
         // Prepare candidate list for AI
         let candidate_descriptions: Vec<String> = candidates
@@ -300,29 +408,35 @@ Respond with ONLY a JSON object:
             .collect();
 
         let prompt = format!(
-            r#"You are selecting the best {} tracks from a list of candidates for a user's radio station.
+            r#"You are a strict music curator. Your job is to select ONLY tracks that genuinely match the user's request.
 
-FILTER CRITERIA:
-{}
+USER'S REQUEST: "{}"
 
 CANDIDATE TRACKS:
 {}
 
-Select the {} best tracks that:
-1. Match the filter criteria most closely
-2. Provide good variety and flow
-3. Are well-rated if ratings exist
-4. Create an engaging listening experience
+CRITICAL INSTRUCTIONS:
+1. REJECT any track that doesn't fit the requested vibe, genre, or mood - even if it's a good song
+2. A jazz track does NOT belong in a hip hop playlist
+3. A pop song does NOT belong in a metal playlist
+4. An upbeat song does NOT belong in a dark/sad playlist
+5. Be STRICT - it's better to return fewer tracks than to include ones that break the vibe
+6. Only select tracks where the artist, genre, and mood genuinely match the request
+7. Use your knowledge of music to identify mismatches (e.g., Art Tatum is jazz, not hip hop)
+
+Select up to {} tracks that GENUINELY match "{}".
+If fewer than {} tracks truly match, return fewer. Quality over quantity.
 
 Respond with ONLY a JSON object:
 {{
   "selected_tracks": ["track_id_1", "track_id_2", ...],
   "scores": [0.95, 0.88, ...],
-  "reasoning": "Brief explanation of selection strategy"
+  "reasoning": "Brief explanation of why these tracks match and what was rejected"
 }}"#,
-            limit,
-            serde_json::to_string_pretty(filters).unwrap_or_default(),
+            original_query,
             candidate_descriptions.join("\n"),
+            limit,
+            original_query,
             limit
         );
 
@@ -339,8 +453,8 @@ Respond with ONLY a JSON object:
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&serde_json::json!({
-                "model": "claude-3-5-sonnet-20241022",
-                "max_tokens": 2048,
+                "model": "claude-sonnet-4-5-20250929",
+                "max_tokens": 8192,  // Enough for ~150 track IDs + scores in response
                 "messages": [{
                     "role": "user",
                     "content": prompt
@@ -349,6 +463,16 @@ Respond with ONLY a JSON object:
             .send()
             .await
             .map_err(|e| AppError::ExternalApi(format!("Failed to call Claude API: {}", e)))?;
+
+        // Check HTTP status code
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(AppError::ExternalApi(format!(
+                "Claude API returned error status {}: {}",
+                status, error_text
+            )));
+        }
 
         let response_json: serde_json::Value = response
             .json()
@@ -360,9 +484,18 @@ Respond with ONLY a JSON object:
             .as_str()
             .ok_or_else(|| AppError::ExternalApi("Invalid response format from Claude".to_string()))?;
 
+        // Strip markdown code fences if present (Claude sometimes wraps JSON in ```json ... ```)
+        let json_text = content_text
+            .trim()
+            .strip_prefix("```json")
+            .or_else(|| content_text.trim().strip_prefix("```"))
+            .map(|s| s.strip_suffix("```").unwrap_or(s))
+            .unwrap_or(content_text)
+            .trim();
+
         // Parse the JSON from the text content
-        let result: T = serde_json::from_str(content_text)
-            .map_err(|e| AppError::ExternalApi(format!("Failed to parse Claude JSON response: {} | Response was: {}", e, content_text)))?;
+        let result: T = serde_json::from_str(json_text)
+            .map_err(|e| AppError::ExternalApi(format!("Failed to parse Claude JSON response: {} | Response was: {}", e, json_text)))?;
 
         Ok(result)
     }
@@ -415,7 +548,7 @@ Respond with ONLY a JSON object:
         sqlx::query!(
             r#"
             INSERT INTO ai_query_cache (query_hash, original_query, analyzed_filters, semantic_intent, ai_model_version)
-            VALUES ($1, $2, $3, $4, 'claude-3-5-sonnet-20241022')
+            VALUES ($1, $2, $3, $4, 'claude-sonnet-4-5-20250929')
             ON CONFLICT (query_hash) DO UPDATE SET
                 last_used = NOW(),
                 use_count = ai_query_cache.use_count + 1

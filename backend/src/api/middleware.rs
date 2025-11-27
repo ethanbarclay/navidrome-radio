@@ -19,12 +19,23 @@ impl FromRequestParts<Arc<AppState>> for RequireAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self> {
-        // Get token from Authorization header
+        // Try to get token from Authorization header first
         let token = parts
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
+            .or_else(|| {
+                // Fall back to query parameter for SSE (EventSource can't send custom headers)
+                parts
+                    .uri
+                    .query()
+                    .and_then(|q| {
+                        q.split('&')
+                            .find(|p| p.starts_with("token="))
+                            .and_then(|p| p.strip_prefix("token="))
+                    })
+            })
             .ok_or(AppError::Unauthorized)?;
 
         // Verify token

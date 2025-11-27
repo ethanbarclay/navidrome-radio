@@ -53,7 +53,7 @@ CREATE TABLE library_index (
     lastfm_listeners INTEGER,
 
     -- AI embedding for semantic search (optional, for future ML features)
-    embedding VECTOR(1536),  -- Will be NULL until we implement embeddings
+    -- embedding VECTOR(1536),  -- Commented out - requires pgvector extension
 
     -- Metadata
     ai_analyzed BOOLEAN NOT NULL DEFAULT false,

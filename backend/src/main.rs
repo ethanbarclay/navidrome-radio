@@ -7,7 +7,10 @@ mod services;
 
 use crate::api::stations::AppState;
 use crate::config::Config;
-use crate::services::{AuthService, CurationEngine, NavidromeClient, StationManager};
+use crate::services::{
+    library_indexer::{LibraryIndexer, TrackAnalyzer},
+    AiCurator, AuthService, CurationEngine, NavidromeClient, StationManager,
+};
 use axum::{
     http::{header, Method},
     routing::get,
@@ -70,11 +73,34 @@ async fn main() -> anyhow::Result<()> {
         navidrome_client.clone(),
     ));
 
+    // Initialize library indexing services
+    let track_analyzer = config.anthropic_api_key.as_ref().map(|api_key| {
+        Arc::new(TrackAnalyzer::new(api_key.clone()))
+    });
+
+    let library_indexer = Arc::new(LibraryIndexer::new(
+        db.clone(),
+        navidrome_client.clone(),
+        track_analyzer,
+    ));
+
+    let ai_curator = config.anthropic_api_key.as_ref().map(|api_key| {
+        Arc::new(AiCurator::new(api_key.clone(), db.clone()))
+    });
+
+    if ai_curator.is_some() {
+        tracing::info!("AI-powered library indexing enabled");
+    } else {
+        tracing::warn!("AI features disabled - ANTHROPIC_API_KEY not set");
+    }
+
     let app_state = Arc::new(AppState {
         db: db.clone(),
         auth_service: auth_service.clone(),
         station_manager: station_manager.clone(),
         curation_engine: curation_engine.clone(),
+        library_indexer: library_indexer.clone(),
+        ai_curator: ai_curator.clone(),
     });
 
     // Load active stations on startup
@@ -90,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
             Router::new()
                 .nest("/auth", api::auth_routes())
                 .merge(api::station_routes())
+                .merge(api::library_routes())
                 .nest("/navidrome", api::streaming_routes().with_state(navidrome_client.clone()))
                 .with_state(app_state.clone()),
         )
