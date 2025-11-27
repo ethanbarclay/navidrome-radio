@@ -320,10 +320,13 @@ async fn get_tracks_by_ids(
     let ids: Vec<String> = req.ids.into_iter().take(500).collect();
 
     // Build query safely using QueryBuilder
-    let mut qb = sqlx::QueryBuilder::new(
+    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
         "SELECT id, title, artist, album FROM library_index WHERE id IN ("
     );
-    qb.separated(", ").push_bindings(&ids);
+    let mut separated = qb.separated(", ");
+    for id in &ids {
+        separated.push_bind(id);
+    }
     qb.push(")");
 
     let rows = qb.build().fetch_all(&state.db).await?;
