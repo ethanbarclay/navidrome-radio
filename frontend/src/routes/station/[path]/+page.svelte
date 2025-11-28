@@ -24,7 +24,25 @@
 	let hasStartedPlaying = $state(false);
 	let mediaSession: MediaSession | null = null;
 
+	// Listener tracking
+	let sessionId = $state<string>('');
+	let heartbeatInterval: number;
+
+	// Handle page unload (tab close, navigation away)
+	function handleBeforeUnload() {
+		if (station && sessionId && hasStartedPlaying) {
+			const data = JSON.stringify({ session_id: sessionId });
+			navigator.sendBeacon(`/api/v1/stations/${station.id}/listener/leave`, data);
+		}
+	}
+
 	onMount(async () => {
+		// Generate a unique session ID for listener tracking
+		sessionId = crypto.randomUUID();
+
+		// Listen for page unload to notify backend
+		window.addEventListener('beforeunload', handleBeforeUnload);
+
 		// Initialize Media Session API for Android notification center
 		if ('mediaSession' in navigator) {
 			mediaSession = navigator.mediaSession;
@@ -93,6 +111,17 @@
 		}
 		if (progressInterval) {
 			clearInterval(progressInterval);
+		}
+		if (heartbeatInterval) {
+			clearInterval(heartbeatInterval);
+		}
+		// Remove beforeunload listener
+		window.removeEventListener('beforeunload', handleBeforeUnload);
+		// Notify backend that listener is leaving (for SPA navigation)
+		if (station && sessionId && hasStartedPlaying) {
+			// Use sendBeacon for reliable delivery
+			const data = JSON.stringify({ session_id: sessionId });
+			navigator.sendBeacon(`/api/v1/stations/${station.id}/listener/leave`, data);
 		}
 	});
 
@@ -274,7 +303,7 @@
 	}
 
 	function startListening() {
-		if (!audioElement || !nowPlaying) return;
+		if (!audioElement || !nowPlaying || !station) return;
 
 		hasStartedPlaying = true;
 		audioElement.muted = isMuted;
@@ -290,6 +319,33 @@
 		}
 
 		audioElement.play();
+
+		// Start listener heartbeat
+		startHeartbeat();
+	}
+
+	function startHeartbeat() {
+		if (!station || heartbeatInterval) return;
+
+		// Send initial heartbeat
+		sendHeartbeat();
+
+		// Then send heartbeat every 10 seconds
+		heartbeatInterval = setInterval(sendHeartbeat, 10000);
+	}
+
+	async function sendHeartbeat() {
+		if (!station || !sessionId) return;
+
+		try {
+			const result = await api.listenerHeartbeat(station.id, sessionId);
+			// Update listener count from heartbeat response
+			if (nowPlaying) {
+				nowPlaying.listeners = result.listeners;
+			}
+		} catch (e) {
+			console.error('Failed to send heartbeat:', e);
+		}
 	}
 
 	function toggleMute() {

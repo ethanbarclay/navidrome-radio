@@ -1,7 +1,7 @@
 use crate::error::{AppError, Result};
 use crate::models::{NowPlaying, Station, Track, TrackInfo};
 use crate::services::{CurationEngine, NavidromeClient};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Duration};
 use redis::aio::ConnectionManager;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -9,12 +9,16 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+/// How long before a listener is considered disconnected (no heartbeat)
+const LISTENER_TIMEOUT_SECONDS: i64 = 15;
+
 #[derive(Clone)]
 pub struct ActiveStation {
     pub station_id: Uuid,
     pub current_track: Option<Track>,
     pub started_at: Option<DateTime<Utc>>,
-    pub listeners: usize,
+    /// Map of session_id -> last heartbeat time
+    pub listener_heartbeats: HashMap<String, DateTime<Utc>>,
 }
 
 #[derive(Clone)]
@@ -61,7 +65,7 @@ impl StationManager {
                     station_id: station.id,
                     current_track: None,
                     started_at: None,
-                    listeners: 0,
+                    listener_heartbeats: HashMap::new(),
                 },
             );
             drop(active_stations);
@@ -92,7 +96,7 @@ impl StationManager {
                 station_id,
                 current_track: None,
                 started_at: None,
-                listeners: 0,
+                listener_heartbeats: HashMap::new(),
             },
         );
 
@@ -223,29 +227,87 @@ impl StationManager {
             .clone()
             .ok_or_else(|| AppError::NotFound("No track playing".to_string()))?;
 
+        // Count active listeners (heartbeat within timeout)
+        let now = Utc::now();
+        let timeout = Duration::seconds(LISTENER_TIMEOUT_SECONDS);
+        let active_listeners = active
+            .listener_heartbeats
+            .values()
+            .filter(|&last_heartbeat| now - *last_heartbeat < timeout)
+            .count();
+
         Ok(NowPlaying {
             track: track.into(),
             started_at: active.started_at.unwrap_or_else(Utc::now),
-            listeners: active.listeners,
+            listeners: active_listeners,
         })
     }
 
-    pub async fn increment_listeners(&self, station_id: Uuid) -> Result<()> {
+    /// Record a heartbeat for a listener session. Returns the current listener count.
+    pub async fn listener_heartbeat(&self, station_id: Uuid, session_id: String) -> Result<usize> {
+        let now = Utc::now();
+        let timeout = Duration::seconds(LISTENER_TIMEOUT_SECONDS);
+
         let mut stations = self.active_stations.write().await;
         if let Some(active) = stations.get_mut(&station_id) {
-            active.listeners += 1;
+            // Update this session's heartbeat
+            active.listener_heartbeats.insert(session_id, now);
+
+            // Clean up stale sessions while we're here
+            active.listener_heartbeats.retain(|_, last_heartbeat| {
+                now - *last_heartbeat < timeout
+            });
+
+            Ok(active.listener_heartbeats.len())
+        } else {
+            Err(AppError::NotFound("Station not active".to_string()))
+        }
+    }
+
+    /// Remove a listener session
+    pub async fn listener_leave(&self, station_id: Uuid, session_id: &str) -> Result<()> {
+        let mut stations = self.active_stations.write().await;
+        if let Some(active) = stations.get_mut(&station_id) {
+            active.listener_heartbeats.remove(session_id);
         }
         Ok(())
     }
 
-    pub async fn decrement_listeners(&self, station_id: Uuid) -> Result<()> {
-        let mut stations = self.active_stations.write().await;
-        if let Some(active) = stations.get_mut(&station_id) {
-            if active.listeners > 0 {
-                active.listeners -= 1;
-            }
+    /// Get the current listener count for a station
+    pub async fn get_listener_count(&self, station_id: Uuid) -> Result<usize> {
+        let now = Utc::now();
+        let timeout = Duration::seconds(LISTENER_TIMEOUT_SECONDS);
+
+        let stations = self.active_stations.read().await;
+        if let Some(active) = stations.get(&station_id) {
+            let count = active
+                .listener_heartbeats
+                .values()
+                .filter(|&last_heartbeat| now - *last_heartbeat < timeout)
+                .count();
+            Ok(count)
+        } else {
+            Ok(0)
         }
-        Ok(())
+    }
+
+    /// Get listener counts for all active stations
+    pub async fn get_all_listener_counts(&self) -> HashMap<Uuid, usize> {
+        let now = Utc::now();
+        let timeout = Duration::seconds(LISTENER_TIMEOUT_SECONDS);
+
+        let stations = self.active_stations.read().await;
+        stations
+            .iter()
+            .map(|(id, active)| {
+                let count = active
+                    .listener_heartbeats
+                    .values()
+                    .filter(|&last_heartbeat| now - *last_heartbeat < timeout)
+                    .count();
+                (*id, count)
+            })
+            .collect()
     }
 
     async fn get_station_by_id(&self, station_id: Uuid) -> Result<Station> {

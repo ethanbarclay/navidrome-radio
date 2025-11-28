@@ -147,6 +147,25 @@ export const api = {
 		return request(`/stations/${id}/nowplaying`);
 	},
 
+	// Listener tracking
+	async listenerHeartbeat(stationId: string, sessionId: string): Promise<{ listeners: number }> {
+		return request(`/stations/${stationId}/listener/heartbeat`, {
+			method: 'POST',
+			body: JSON.stringify({ session_id: sessionId })
+		});
+	},
+
+	async listenerLeave(stationId: string, sessionId: string): Promise<void> {
+		return request(`/stations/${stationId}/listener/leave`, {
+			method: 'POST',
+			body: JSON.stringify({ session_id: sessionId })
+		});
+	},
+
+	async getListenerCounts(): Promise<{ counts: Record<string, number> }> {
+		return request('/stations/listeners');
+	},
+
 	// AI Capabilities
 	async getAiCapabilities(): Promise<{ available: boolean; features: string[] }> {
 		return request('/ai/capabilities');

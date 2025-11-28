@@ -39,6 +39,9 @@
 	let stationTracks = $state<Map<string, Array<{ id: string; title: string; artist: string; played_at?: string }>>>(new Map());
 	let loadingStationTracks = $state<string | null>(null);
 
+	// Listener counts
+	let listenerCounts = $state<Record<string, number>>({});
+
 	// Library sync state
 	let libraryStats = $state<{
 		total_tracks: number;
@@ -58,14 +61,34 @@
 	} | null>(null);
 	let eventSource: EventSource | null = null;
 
+	let listenerCountInterval: number;
+
 	onMount(async () => {
 		if (!authStore.isAdmin) {
 			goto('/');
 			return;
 		}
 
-		await Promise.all([loadStations(), loadAiCapabilities(), loadLibraryStats()]);
+		await Promise.all([loadStations(), loadAiCapabilities(), loadLibraryStats(), loadListenerCounts()]);
+
+		// Poll for listener counts every 5 seconds
+		listenerCountInterval = setInterval(loadListenerCounts, 5000);
+
+		return () => {
+			if (listenerCountInterval) {
+				clearInterval(listenerCountInterval);
+			}
+		};
 	});
+
+	async function loadListenerCounts() {
+		try {
+			const result = await api.getListenerCounts();
+			listenerCounts = result.counts;
+		} catch (e) {
+			console.error('Failed to load listener counts:', e);
+		}
+	}
 
 	async function loadLibraryStats() {
 		try {
@@ -780,6 +803,13 @@
 									>
 										<span class="w-2 h-2 bg-white rounded-full animate-pulse"></span>
 										Live
+									</span>
+									<!-- Listener count -->
+									<span class="px-2 py-1 bg-blue-600 text-white text-xs font-semibold rounded-full flex items-center gap-1">
+										<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+											<path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
+										</svg>
+										{listenerCounts[station.id] || 0} {(listenerCounts[station.id] || 0) === 1 ? 'listener' : 'listeners'}
 									</span>
 								{:else}
 									<span class="px-2 py-1 bg-gray-600 text-gray-300 text-xs font-semibold rounded-full">

@@ -49,12 +49,15 @@ struct AnalyzeDescriptionResponse {
 pub fn station_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/stations", get(list_stations).post(create_station))
+        .route("/stations/listeners", get(get_all_listener_counts))  // Must be before :id route
         .route("/stations/:id", get(get_station).patch(update_station).delete(delete_station))
         .route("/stations/:id/start", post(start_station))
         .route("/stations/:id/stop", post(stop_station))
         .route("/stations/:id/skip", post(skip_track))
         .route("/stations/:id/nowplaying", get(now_playing))
         .route("/stations/:id/tracks", get(get_station_tracks))
+        .route("/stations/:id/listener/heartbeat", post(listener_heartbeat))
+        .route("/stations/:id/listener/leave", post(listener_leave))
         .route("/ai/capabilities", get(ai_capabilities))
         .route("/ai/analyze-description", post(analyze_description))
         .route("/ai/curate", post(curate_tracks_sse))
@@ -242,6 +245,57 @@ async fn now_playing(
 ) -> Result<Json<NowPlaying>> {
     let np = state.station_manager.get_now_playing(id).await?;
     Ok(Json(np))
+}
+
+#[derive(Debug, Deserialize)]
+struct HeartbeatRequest {
+    session_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HeartbeatResponse {
+    listeners: usize,
+}
+
+async fn listener_heartbeat(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<HeartbeatRequest>,
+) -> Result<Json<HeartbeatResponse>> {
+    let listeners = state
+        .station_manager
+        .listener_heartbeat(id, req.session_id)
+        .await?;
+    Ok(Json(HeartbeatResponse { listeners }))
+}
+
+#[derive(Debug, Deserialize)]
+struct LeaveRequest {
+    session_id: String,
+}
+
+async fn listener_leave(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<LeaveRequest>,
+) -> Result<Json<()>> {
+    state
+        .station_manager
+        .listener_leave(id, &req.session_id)
+        .await?;
+    Ok(Json(()))
+}
+
+#[derive(Debug, Serialize)]
+struct ListenerCountsResponse {
+    counts: std::collections::HashMap<Uuid, usize>,
+}
+
+async fn get_all_listener_counts(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ListenerCountsResponse>> {
+    let counts = state.station_manager.get_all_listener_counts().await;
+    Ok(Json(ListenerCountsResponse { counts }))
 }
 
 #[derive(Debug, Deserialize)]
