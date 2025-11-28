@@ -5,6 +5,21 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import type { NowPlaying, Station } from '$lib/types';
 
+	// Prevent scrolling on mount
+	onMount(() => {
+		document.documentElement.style.setProperty('overflow', 'hidden', 'important');
+		document.body.style.setProperty('overflow', 'hidden', 'important');
+		document.documentElement.style.height = '100%';
+		document.body.style.height = '100%';
+
+		return () => {
+			document.documentElement.style.removeProperty('overflow');
+			document.body.style.removeProperty('overflow');
+			document.documentElement.style.height = '';
+			document.body.style.height = '';
+		};
+	});
+
 	let stationPath = $derived($page.params.path);
 	let station = $state<Station | null>(null);
 	let nowPlaying = $state<NowPlaying | null>(null);
@@ -368,53 +383,61 @@
 	}
 </script>
 
+<svelte:head>
+	<style>
+		html, body {
+			overflow: hidden !important;
+			height: 100% !important;
+			margin: 0 !important;
+			padding: 0 !important;
+		}
+	</style>
+</svelte:head>
+
 {#if loading}
-	<div class="min-h-screen flex items-center justify-center">
+	<div class="fixed inset-0 flex items-center justify-center bg-gray-900">
 		<div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
 	</div>
 {:else if error}
-	<div class="min-h-screen flex items-center justify-center">
+	<div class="fixed inset-0 flex items-center justify-center bg-gray-900">
 		<div class="text-center">
 			<p class="text-red-500 text-xl mb-4">{error}</p>
 			<a href="/" class="text-blue-400 hover:text-blue-300">Back to stations</a>
 		</div>
 	</div>
 {:else if station && nowPlaying}
-	<div class="min-h-screen flex flex-col bg-gray-900 text-white p-4 md:p-8">
+	<div class="fixed inset-0 flex flex-col bg-gray-900 text-white p-2 overflow-hidden">
 		<audio
 			bind:this={audioElement}
 			src="/api/v1/navidrome/stream/{nowPlaying.track.id}"
 		></audio>
 
-		<!-- Station name at top -->
-		<div class="text-center mb-8">
-			<a href="/" class="text-blue-400 hover:text-blue-300 text-sm mb-2 inline-block">
-				← Back to stations
-			</a>
-			<h1 class="text-2xl md:text-3xl font-bold">{station.name}</h1>
-			<p class="text-gray-400 mt-2">{station.description}</p>
+		<!-- Station name at top - compact -->
+		<div class="text-center shrink-0 leading-none">
+			<a href="/" class="text-blue-400 hover:text-blue-300 text-xs">← Back</a>
+			<h1 class="text-base md:text-lg font-bold">{station.name}</h1>
 		</div>
 
-		<!-- Now playing - centered -->
-		<div class="flex-1 flex flex-col items-center justify-center space-y-4 md:space-y-6 max-w-2xl mx-auto w-full">
+		<!-- Now playing - centered, takes remaining space -->
+		<div class="flex-1 flex flex-col items-center justify-center gap-1 min-h-0">
 			<!-- Start listening overlay -->
 			{#if !hasStartedPlaying}
 				<div class="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 backdrop-blur-sm">
-					<div class="text-center space-y-6 p-8">
+					<div class="text-center space-y-4 p-6">
 						<div class="text-white">
-							<svg class="w-24 h-24 mx-auto mb-4 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+							<svg class="w-20 h-20 mx-auto mb-3 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
 								<path
 									fill-rule="evenodd"
 									d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
 									clip-rule="evenodd"
 								/>
 							</svg>
-							<p class="text-lg md:text-xl text-gray-300 mb-2">Now Playing: {nowPlaying.track.title}</p>
-							<p class="text-base text-gray-400">{nowPlaying.track.artist}</p>
+							<p class="text-base md:text-lg text-gray-300 mb-1">{nowPlaying.track.title}</p>
+							<p class="text-sm text-gray-400">{nowPlaying.track.artist}</p>
 						</div>
 						<button
 							onclick={startListening}
-							class="px-16 py-6 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white text-2xl font-bold rounded-full transition-all transform hover:scale-105 active:scale-95 shadow-2xl"
+							class="px-12 py-4 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white text-xl font-bold rounded-full transition-all transform hover:scale-105 active:scale-95 shadow-2xl"
 						>
 							Play Radio
 						</button>
@@ -422,18 +445,19 @@
 				</div>
 			{/if}
 
-			<!-- Album art -->
+			<!-- Album art - responsive size based on viewport -->
 			{#if nowPlaying.track.albumArt}
 				<img
 					src={nowPlaying.track.albumArt}
 					alt={nowPlaying.track.album}
-					class="w-64 h-64 md:w-80 md:h-80 lg:w-96 lg:h-96 rounded-lg shadow-2xl object-cover"
+					class="aspect-square rounded-lg shadow-2xl object-cover max-h-[30vh] md:max-h-[38vh] w-auto"
 				/>
 			{:else}
 				<div
-					class="w-64 h-64 md:w-80 md:h-80 lg:w-96 lg:h-96 rounded-lg shadow-2xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center"
+					class="aspect-square rounded-lg shadow-2xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center max-h-[30vh] md:max-h-[38vh]"
+					style="width: min(30vh, 38vh);"
 				>
-					<svg class="w-32 h-32 text-white" fill="currentColor" viewBox="0 0 20 20">
+					<svg class="w-1/3 h-1/3 text-white" fill="currentColor" viewBox="0 0 20 20">
 						<path
 							d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z"
 						/>
@@ -441,44 +465,35 @@
 				</div>
 			{/if}
 
-			<!-- Track info -->
-			<div class="text-center max-w-lg px-4 w-full space-y-4">
-				<div>
-					<h2 class="text-2xl md:text-3xl lg:text-4xl font-bold mb-2 truncate">
-						{nowPlaying.track.title}
-					</h2>
-					<p class="text-lg md:text-xl text-gray-300 mb-1 truncate">
-						{nowPlaying.track.artist}
-					</p>
-					<p class="text-sm md:text-base text-gray-400 truncate">
-						{nowPlaying.track.album}
-					</p>
-				</div>
+			<!-- Track info - compact -->
+			<div class="text-center w-full max-w-md px-2 shrink-0">
+				<h2 class="text-base md:text-lg font-bold truncate">{nowPlaying.track.title}</h2>
+				<p class="text-xs md:text-sm text-gray-300 truncate">{nowPlaying.track.artist}</p>
+				<p class="text-xs text-gray-500 truncate">{nowPlaying.track.album}</p>
+			</div>
 
-				<!-- Progress bar -->
-				<div class="w-full px-2">
-					<div class="flex items-center justify-between text-xs md:text-sm text-gray-400 mb-2">
-						<span>{formatTime(currentPosition)}</span>
-						<span>{formatTime(nowPlaying.track.duration)}</span>
-					</div>
-					<div class="w-full bg-gray-700 rounded-full h-1.5 md:h-2 overflow-hidden">
-						<div
-							class="bg-blue-500 h-full transition-all duration-200 ease-linear"
-							style="width: {(currentPosition / nowPlaying.track.duration) * 100}%"
-						></div>
-					</div>
+			<!-- Progress bar - compact -->
+			<div class="w-full max-w-md px-4 shrink-0">
+				<div class="flex items-center justify-between text-xs text-gray-500">
+					<span>{formatTime(currentPosition)}</span>
+					<span>{formatTime(nowPlaying.track.duration)}</span>
+				</div>
+				<div class="w-full bg-gray-700 rounded-full h-1 overflow-hidden">
+					<div
+						class="bg-blue-500 h-full transition-all duration-200 ease-linear"
+						style="width: {(currentPosition / nowPlaying.track.duration) * 100}%"
+					></div>
 				</div>
 			</div>
 
 			<!-- Mute/Unmute button -->
 			<button
 				onclick={toggleMute}
-				class="w-16 h-16 md:w-20 md:h-20 bg-blue-600 hover:bg-blue-700 rounded-full flex items-center justify-center transition-colors active:scale-95"
+				class="w-12 h-12 md:w-14 md:h-14 bg-blue-600 hover:bg-blue-700 rounded-full flex items-center justify-center transition-colors active:scale-95 shrink-0"
 				title={hasStartedPlaying ? (isMuted ? 'Unmute' : 'Mute') : 'Start Listening'}
 			>
 				{#if isMuted}
-					<!-- Muted icon -->
-					<svg class="w-8 h-8 md:w-10 md:h-10" fill="currentColor" viewBox="0 0 20 20">
+					<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
 						<path
 							fill-rule="evenodd"
 							d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM12.293 7.293a1 1 0 011.414 0L15 8.586l1.293-1.293a1 1 0 111.414 1.414L16.414 10l1.293 1.293a1 1 0 01-1.414 1.414L15 11.414l-1.293 1.293a1 1 0 01-1.414-1.414L13.586 10l-1.293-1.293a1 1 0 010-1.414z"
@@ -486,8 +501,7 @@
 						/>
 					</svg>
 				{:else}
-					<!-- Unmuted icon -->
-					<svg class="w-8 h-8 md:w-10 md:h-10" fill="currentColor" viewBox="0 0 20 20">
+					<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
 						<path
 							fill-rule="evenodd"
 							d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z"
@@ -498,24 +512,23 @@
 			</button>
 		</div>
 
-		<!-- Controls at bottom -->
-		<div class="mt-8 space-y-4">
-			<div class="flex items-center justify-center gap-2 text-sm md:text-base text-gray-400">
-				<svg class="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 20 20">
+		<!-- Controls at bottom - single row -->
+		<div class="shrink-0 flex items-center justify-center gap-4 pb-safe">
+			<div class="flex items-center gap-1.5 text-sm text-gray-400">
+				<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
 					<path
 						d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"
 					/>
 				</svg>
-				<span>{nowPlaying.listeners} {nowPlaying.listeners === 1 ? 'listener' : 'listeners'}</span
-				>
+				<span>{nowPlaying.listeners} {nowPlaying.listeners === 1 ? 'listener' : 'listeners'}</span>
 			</div>
 
 			{#if authStore.isAdmin}
 				<button
 					onclick={handleSkip}
-					class="w-full md:w-auto mx-auto block px-8 py-4 md:py-3 bg-orange-600 hover:bg-orange-700 rounded-lg font-semibold text-base md:text-lg transition-colors active:scale-95"
+					class="px-4 py-1.5 bg-orange-600 hover:bg-orange-700 rounded font-medium text-xs transition-colors active:scale-95"
 				>
-					Skip Track
+					Skip
 				</button>
 			{/if}
 		</div>
@@ -527,5 +540,10 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	/* Safe area padding for iOS devices with notch/home indicator */
+	.pb-safe {
+		padding-bottom: env(safe-area-inset-bottom, 0);
 	}
 </style>
