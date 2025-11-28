@@ -191,6 +191,11 @@
 		// Disable previous/next (could be added later for station history)
 		mediaSession.setActionHandler('previoustrack', null);
 		mediaSession.setActionHandler('nexttrack', null);
+
+		// Clear position state to hide scrubber - makes it look like a livestream
+		if ('setPositionState' in mediaSession) {
+			mediaSession.setPositionState();
+		}
 	}
 
 	async function updateMediaSession() {
@@ -239,6 +244,11 @@
 		}
 
 		mediaSession.playbackState = audioElement?.paused ? 'paused' : 'playing';
+
+		// Clear position state to hide scrubber - makes it look like a livestream
+		if ('setPositionState' in mediaSession) {
+			mediaSession.setPositionState();
+		}
 	}
 
 	function syncAudioPosition(np: NowPlaying) {
