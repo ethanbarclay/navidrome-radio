@@ -1,6 +1,6 @@
 # Multi-stage build for single-binary Navidrome Radio
 # Stage 1: Build frontend
-FROM node:20-slim as frontend-builder
+FROM node:20-slim AS frontend-builder
 
 WORKDIR /app/frontend
 
@@ -17,7 +17,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build backend with embedded frontend
-FROM rustlang/rust:nightly-slim as backend-builder
+FROM rustlang/rust:nightly-slim AS backend-builder
 
 WORKDIR /app
 
@@ -25,6 +25,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy backend manifests
@@ -54,6 +55,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder (frontend is embedded in it)
