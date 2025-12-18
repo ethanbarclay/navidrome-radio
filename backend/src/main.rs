@@ -98,28 +98,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize audio encoder (optional - requires ONNX model)
-    let audio_encoder = config.audio_encoder_model_path.as_ref().and_then(|model_path| {
-        let path = PathBuf::from(model_path);
-        if path.exists() {
-            let encoder_config = AudioEncoderConfig {
-                model_path: path,
-                ..Default::default()
-            };
-            match AudioEncoder::new(encoder_config, db.clone()) {
-                Ok(encoder) => {
-                    tracing::info!("Audio encoder initialized successfully");
-                    Some(Arc::new(encoder))
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to initialize audio encoder: {}", e);
-                    None
-                }
-            }
-        } else {
-            tracing::warn!("Audio encoder model not found at: {:?}", path);
-            None
-        }
-    });
+    // Will auto-download from GitHub releases if not found locally
+    let audio_encoder = initialize_audio_encoder(&config, &db).await;
 
     // Initialize hybrid curator (optional - requires both API key and audio encoder)
     let hybrid_curator = match (&config.anthropic_api_key, &audio_encoder) {
@@ -195,4 +175,115 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// GitHub releases URL for the audio encoder model
+const MODEL_RELEASE_URL: &str = "https://github.com/ethanbarclay/navidrome-radio/releases/latest/download/audio_encoder.onnx";
+
+/// Default model locations to check
+const MODEL_PATHS: &[&str] = &[
+    "/app/models/audio_encoder.onnx",      // Docker
+    "models/audio_encoder.onnx",           // Local dev (from backend dir)
+    "backend/models/audio_encoder.onnx",   // Project root
+];
+
+/// Initialize audio encoder, downloading the model if necessary
+async fn initialize_audio_encoder(
+    config: &Config,
+    db: &sqlx::PgPool,
+) -> Option<Arc<AudioEncoder>> {
+    // Check env var first
+    if let Some(ref env_path) = config.audio_encoder_model_path {
+        let path = PathBuf::from(env_path);
+        if path.exists() {
+            return create_audio_encoder(path, db);
+        }
+        tracing::warn!("AUDIO_ENCODER_MODEL_PATH set but file not found: {:?}", path);
+    }
+
+    // Check default locations
+    for path_str in MODEL_PATHS {
+        let path = PathBuf::from(path_str);
+        if path.exists() {
+            tracing::info!("Found audio encoder model at: {:?}", path);
+            return create_audio_encoder(path, db);
+        }
+    }
+
+    // Model not found locally - try to download
+    tracing::info!("Audio encoder model not found locally, attempting download...");
+
+    // Use first writable location (prefer /app/models in Docker, else local models/)
+    let download_path = if PathBuf::from("/app").exists() {
+        PathBuf::from("/app/models/audio_encoder.onnx")
+    } else {
+        PathBuf::from("models/audio_encoder.onnx")
+    };
+
+    match download_model(&download_path).await {
+        Ok(()) => {
+            tracing::info!("Successfully downloaded audio encoder model to {:?}", download_path);
+            create_audio_encoder(download_path, db)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to download audio encoder model: {}. ML features will be disabled.", e);
+            None
+        }
+    }
+}
+
+/// Download the ONNX model from GitHub releases
+async fn download_model(dest: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncWriteExt;
+
+    // Create parent directory if needed
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    tracing::info!("Downloading audio encoder model from GitHub releases...");
+    tracing::info!("URL: {}", MODEL_RELEASE_URL);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()?;
+
+    let response = client.get(MODEL_RELEASE_URL).send().await?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}: {}", response.status(), MODEL_RELEASE_URL).into());
+    }
+
+    let total_size = response.content_length().unwrap_or(0);
+    if total_size > 0 {
+        tracing::info!("Model size: {:.1} MB", total_size as f64 / 1_000_000.0);
+    }
+
+    let bytes = response.bytes().await?;
+
+    let mut file = tokio::fs::File::create(dest).await?;
+    file.write_all(&bytes).await?;
+    file.flush().await?;
+
+    tracing::info!("Download complete: {:?} ({:.1} MB)", dest, bytes.len() as f64 / 1_000_000.0);
+    Ok(())
+}
+
+/// Create an AudioEncoder instance from a model path
+fn create_audio_encoder(path: PathBuf, db: &sqlx::PgPool) -> Option<Arc<AudioEncoder>> {
+    let encoder_config = AudioEncoderConfig {
+        model_path: path.clone(),
+        ..Default::default()
+    };
+
+    match AudioEncoder::new(encoder_config, db.clone()) {
+        Ok(encoder) => {
+            tracing::info!("Audio encoder initialized from: {:?}", path);
+            Some(Arc::new(encoder))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to initialize audio encoder: {}", e);
+            None
+        }
+    }
 }

@@ -57,7 +57,7 @@ impl Default for AudioEncoderConfig {
         // - With hop_length=512 and 216 frames, we need 216*512 = 110,592 samples
         // - At 22050 Hz, that's about 5 seconds of audio
         Self {
-            model_path: PathBuf::from("models/audio_encoder_correct.onnx"),
+            model_path: PathBuf::from("models/audio_encoder.onnx"),
             sample_rate: 22050,
             n_mels: 96,  // Model expects 96 mel bins
             n_fft: 2048,
