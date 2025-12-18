@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE library_sync_status SET total_tracks_in_navidrome = $1 WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "05ae1aef85e1fa9e666fd9f31dd395b18c0092d0478ffac57fbdbb40df7a58d3"
+}

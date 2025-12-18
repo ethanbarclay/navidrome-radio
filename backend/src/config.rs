@@ -12,6 +12,10 @@ pub struct Config {
     pub jwt_secret: String,
     pub server_host: String,
     pub server_port: u16,
+    /// Path to the Navidrome music library (for audio embedding generation)
+    pub navidrome_library_path: Option<String>,
+    /// Path to the ONNX audio encoder model
+    pub audio_encoder_model_path: Option<String>,
 }
 
 impl Config {
@@ -39,6 +43,8 @@ impl Config {
                 .unwrap_or_else(|_| "8000".to_string())
                 .parse()
                 .unwrap_or(8000),
+            navidrome_library_path: env::var("NAVIDROME_LIBRARY_PATH").ok(),
+            audio_encoder_model_path: env::var("AUDIO_ENCODER_MODEL_PATH").ok(),
         })
     }
 }

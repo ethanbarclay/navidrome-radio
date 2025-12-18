@@ -1,9 +1,9 @@
 version: '3.9'
 
 services:
-  # PostgreSQL database
+  # PostgreSQL database with pgvector extension
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: navidrome_radio
@@ -46,11 +46,20 @@ services:
       NAVIDROME_PASSWORD: ${NAVIDROME_PASSWORD}
       JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Audio embedding configuration (optional - enables ML-based curation)
+      # Set NAVIDROME_LIBRARY_PATH to match the library mount path (e.g., /music)
+      # Use docker-compose.ml.yml to enable ML features with library mounting
+      NAVIDROME_LIBRARY_PATH: ${NAVIDROME_LIBRARY_PATH:-}
+      AUDIO_ENCODER_MODEL_PATH: ${AUDIO_ENCODER_MODEL_PATH:-/app/models/audio_encoder.onnx}
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 8000
       RUST_LOG: info
     ports:
       - "8000:8000"
+    # Uncomment to enable audio embedding generation (requires library access)
+    # volumes:
+    #   # Mount Navidrome's music library (read-only) - path must match NAVIDROME_LIBRARY_PATH
+    #   - /path/to/navidrome/music:/music:ro
     depends_on:
       postgres:
         condition: service_healthy

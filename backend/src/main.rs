@@ -8,9 +8,12 @@ mod services;
 use crate::api::stations::AppState;
 use crate::config::Config;
 use crate::services::{
+    audio_encoder::{AudioEncoder, AudioEncoderConfig},
+    hybrid_curator::{HybridCurator, HybridCurationConfig},
     library_indexer::{LibraryIndexer, TrackAnalyzer},
     AiCurator, AuthService, CurationEngine, NavidromeClient, StationManager,
 };
+use std::path::PathBuf;
 use axum::{
     http::{header, Method},
     routing::get,
@@ -94,6 +97,53 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("AI features disabled - ANTHROPIC_API_KEY not set");
     }
 
+    // Initialize audio encoder (optional - requires ONNX model)
+    let audio_encoder = config.audio_encoder_model_path.as_ref().and_then(|model_path| {
+        let path = PathBuf::from(model_path);
+        if path.exists() {
+            let encoder_config = AudioEncoderConfig {
+                model_path: path,
+                ..Default::default()
+            };
+            match AudioEncoder::new(encoder_config, db.clone()) {
+                Ok(encoder) => {
+                    tracing::info!("Audio encoder initialized successfully");
+                    Some(Arc::new(encoder))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to initialize audio encoder: {}", e);
+                    None
+                }
+            }
+        } else {
+            tracing::warn!("Audio encoder model not found at: {:?}", path);
+            None
+        }
+    });
+
+    // Initialize hybrid curator (optional - requires both API key and audio encoder)
+    let hybrid_curator = match (&config.anthropic_api_key, &audio_encoder) {
+        (Some(api_key), Some(encoder)) => {
+            let curator = HybridCurator::new(
+                api_key.clone(),
+                Some(encoder.clone()),
+                db.clone(),
+                HybridCurationConfig::default(),
+                config.navidrome_library_path.clone().map(std::path::PathBuf::from),
+            );
+            tracing::info!("Hybrid curator initialized (ML + LLM curation enabled)");
+            Some(Arc::new(curator))
+        }
+        (Some(_), None) => {
+            tracing::info!("Hybrid curator disabled - audio encoder not available");
+            None
+        }
+        (None, _) => {
+            tracing::info!("Hybrid curator disabled - no API key");
+            None
+        }
+    };
+
     let app_state = Arc::new(AppState {
         db: db.clone(),
         auth_service: auth_service.clone(),
@@ -101,6 +151,12 @@ async fn main() -> anyhow::Result<()> {
         curation_engine: curation_engine.clone(),
         library_indexer: library_indexer.clone(),
         ai_curator: ai_curator.clone(),
+        audio_encoder,
+        hybrid_curator,
+        navidrome_library_path: config.navidrome_library_path.clone(),
+        embedding_control: Arc::new(tokio::sync::RwLock::new(
+            crate::api::stations::EmbeddingControlState::default(),
+        )),
     });
 
     // Load active stations on startup

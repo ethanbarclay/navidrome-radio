@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT li.id\n                FROM library_index li\n                WHERE li.id != ALL($1)\n                AND EXISTS (\n                    SELECT 1 FROM library_index seed\n                    WHERE seed.id = ANY($1)\n                    AND seed.genres ?| (SELECT array_agg(g) FROM jsonb_array_elements_text(li.genres) g)\n                )\n                LIMIT $2\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "115d8d411e069c9d8190f96c0d4d8650818c98e0c4b12687d2d17e7036dcd81d"
+}
