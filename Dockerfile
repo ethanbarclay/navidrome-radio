@@ -51,12 +51,27 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
+# ONNX Runtime version
+ARG ORT_VERSION=1.19.2
+ARG TARGETARCH
+
+# Install runtime dependencies and ONNX Runtime
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     libstdc++6 \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    # Determine ONNX Runtime architecture
+    && if [ "$TARGETARCH" = "arm64" ]; then ORT_ARCH="aarch64"; else ORT_ARCH="x64"; fi \
+    # Download and install ONNX Runtime
+    && curl -fSL -o /tmp/onnxruntime.tgz \
+       "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}.tgz" \
+    && tar -xzf /tmp/onnxruntime.tgz -C /tmp \
+    && cp /tmp/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} /usr/lib/ \
+    && ln -s /usr/lib/libonnxruntime.so.${ORT_VERSION} /usr/lib/libonnxruntime.so \
+    && rm -rf /tmp/onnxruntime* \
+    && ldconfig
 
 # Copy binary from builder (frontend is embedded in it)
 COPY --from=backend-builder /app/target/release/navidrome-radio /usr/local/bin/navidrome-radio
