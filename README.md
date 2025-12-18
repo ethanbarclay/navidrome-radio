@@ -179,10 +179,11 @@ navidrome-radio/
 │   │   ├── api/         # HTTP endpoints
 │   │   ├── services/    # Business logic
 │   │   └── models/      # Data models
-│   ├── migrations/      # Database schemas
-│   └── target/
-│       └── release/
-│           └── navidrome-radio  # Single binary with embedded frontend
+│   └── migrations/      # Database schemas
+├── scripts/          # Development scripts
+│   ├── analysis/        # Embedding analysis tools
+│   └── model/           # ONNX export scripts
+├── docs/             # Documentation
 ├── docker-compose.yml   # Full stack deployment
 ├── Dockerfile        # Unified image (frontend + backend)
 ├── dev.sh           # Development tool
@@ -254,7 +255,7 @@ navidrome-radio/
 | `JWT_SECRET` | JWT signing secret | - | Yes |
 | `ANTHROPIC_API_KEY` | Claude API (optional) | - | No |
 | `NAVIDROME_LIBRARY_PATH` | Path to music files for audio analysis | - | No |
-| `AUDIO_ENCODER_MODEL_PATH` | Path to ONNX audio encoder model | - | No |
+| `AUDIO_ENCODER_MODEL_PATH` | Path to ONNX model (auto-downloads if not set) | - | No |
 | `SERVER_HOST` | Bind address | `0.0.0.0` | No |
 | `SERVER_PORT` | Server port | `8000` | No |
 | `RUST_LOG` | Log level | `info` | No |
@@ -275,9 +276,10 @@ When creating a station, you can configure:
 
 Navidrome Radio supports ML-powered audio similarity for creating sonically coherent playlists. This requires:
 
-1. **ONNX Audio Encoder Model** - A pre-trained model that converts audio to 100-dimensional embeddings
-2. **Access to Music Files** - Direct filesystem access to your Navidrome music library
-3. **pgvector Extension** - PostgreSQL extension for vector similarity search (included in docker-compose)
+1. **Access to Music Files** - Direct filesystem access to your Navidrome music library
+2. **pgvector Extension** - PostgreSQL extension for vector similarity search (included in docker-compose)
+
+The ONNX audio encoder model (~160MB) is **automatically downloaded** from GitHub Releases on first startup if not present locally.
 
 #### How Hybrid Curation Works
 
@@ -289,20 +291,26 @@ Navidrome Radio supports ML-powered audio similarity for creating sonically cohe
 #### Setting Up Audio Embeddings
 
 ```bash
-# 1. Set environment variables
+# 1. Set environment variable for music file access
 export NAVIDROME_LIBRARY_PATH=/path/to/your/music
-export AUDIO_ENCODER_MODEL_PATH=/path/to/audio_encoder.onnx
 
 # 2. Use pgvector-enabled PostgreSQL (already in docker-compose.yml)
 # Image: pgvector/pgvector:pg16
 
-# 3. In Admin Dashboard, click "Sync Library" then "Generate Audio Embeddings"
+# 3. Start the application - model downloads automatically on first run
+./dev.sh run
+
+# 4. In Admin Dashboard, click "Sync Library" then "Generate Audio Embeddings"
 # This analyzes your music files and stores embeddings for similarity search
 ```
 
 #### Embedding Visualization
 
 The Admin Dashboard includes an interactive 3D visualization of your music library based on audio embeddings. Tracks that sound similar appear closer together, letting you explore your library's sonic landscape.
+
+#### Development Scripts
+
+See [docs/scripts.md](docs/scripts.md) for Python scripts to analyze embeddings and export models.
 
 ## 📡 API Reference
 

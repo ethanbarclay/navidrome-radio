@@ -46,15 +46,12 @@ tmp/
 temp/
 *.tmp
 
-# ML models (too large for git)
+# ML models (too large for git, distributed via GitHub releases)
 backend/models/
 
-# Python dev scripts & cache
-backend/*.py
-backend/__pycache__/
-
-# Optional docker compose variants
-docker-compose.ml.yml
+# Python cache
+__pycache__/
+scripts/**/venv/
 
 # Vite temp files
 *.timestamp-*.mjs
