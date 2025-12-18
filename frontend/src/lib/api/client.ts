@@ -16,6 +16,87 @@ export interface CurationProgress {
 	reasoning?: string;
 }
 
+// Embedding progress types
+export interface EmbeddingProgress {
+	type: 'started' | 'processing' | 'track_complete' | 'track_error' | 'completed' | 'error';
+	message?: string;
+	total_tracks?: number;
+	current?: number;
+	total?: number;
+	completed?: number;  // Number of completed tracks (for processing type)
+	success_count?: number;
+	error_count?: number;
+	in_progress?: string[];  // Track names currently being processed in parallel
+	current_track?: string;  // Legacy single track (kept for backwards compatibility)
+	track_id?: string;
+	track_name?: string;
+	processing_time_ms?: number;
+	error?: string;
+	total_time_secs?: number;
+}
+
+// Hybrid curation progress types (matches backend HybridCurationProgress enum)
+export interface HybridCurationProgress {
+	step: 'started' | 'checking_embeddings' | 'selecting_seeds' | 'seeds_selected' | 'generating_embeddings' | 'filling_gaps' | 'completed' | 'error';
+	message: string;
+	query?: string;
+	coverage_percent?: number;
+	count?: number;
+	seeds?: string[];
+	// generating_embeddings fields
+	current?: number;
+	total?: number;
+	track_name?: string;
+	// filling_gaps fields
+	segment?: number;
+	total_segments?: number;
+	from_seed?: string;
+	to_seed?: string;
+	// completed fields
+	total_tracks?: number;
+	seed_count?: number;
+	filled_count?: number;
+	method?: string;
+	track_ids?: string[];
+}
+
+// Two-phase curation types
+export interface SeedTrack {
+	id: string;
+	title: string;
+	artist: string;
+	album: string;
+}
+
+export interface SelectSeedsResponse {
+	seeds: SeedTrack[];
+	query: string;
+	genres: string[];
+}
+
+export interface FillGapsResponse {
+	track_ids: string[];
+	tracks: Array<{ id: string; title: string; artist: string }>;
+	seed_count: number;
+	filled_count: number;
+}
+
+// Embedding visualization types
+export interface EmbeddingPoint {
+	id: string;
+	title: string;
+	artist: string;
+	album: string;
+	genre: string | null;
+	x: number;
+	y: number;
+}
+
+export interface EmbeddingVisualizationResponse {
+	points: EmbeddingPoint[];
+	cache_rebuilt: boolean;
+}
+
 function getAuthToken(): string | null {
 	if (typeof localStorage === 'undefined') return null;
 	return localStorage.getItem('auth_token');
@@ -75,7 +156,7 @@ export const api = {
 		localStorage.removeItem('auth_token');
 	},
 
-	async getCurrentUser() {
+	async getCurrentUser(): Promise<{ id: string; username: string; email: string; role: 'admin' | 'listener' }> {
 		return request('/auth/me');
 	},
 
@@ -323,5 +404,121 @@ export const api = {
 			method: 'POST',
 			body: JSON.stringify({ ids })
 		});
+	},
+
+	// Audio Embedding APIs
+	async getEmbeddingStatus(): Promise<{
+		total_tracks: number;
+		tracks_with_embeddings: number;
+		coverage_percent: number;
+		indexing_in_progress: boolean;
+	}> {
+		return request('/embeddings/status');
+	},
+
+	async startEmbeddingIndex(batchSize?: number, maxTracks?: number): Promise<{
+		message: string;
+		status: string;
+	}> {
+		return request('/embeddings/index', {
+			method: 'POST',
+			body: JSON.stringify({
+				batch_size: batchSize,
+				max_tracks: maxTracks
+			})
+		});
+	},
+
+	async pauseEmbeddings(): Promise<{ message: string; status: string }> {
+		return request('/embeddings/pause', { method: 'POST' });
+	},
+
+	async resumeEmbeddings(): Promise<{ message: string; status: string }> {
+		return request('/embeddings/resume', { method: 'POST' });
+	},
+
+	async stopEmbeddings(): Promise<{ message: string; status: string }> {
+		return request('/embeddings/stop', { method: 'POST' });
+	},
+
+	// Hybrid AI Curation with SSE progress streaming
+	hybridCurateWithProgress(
+		query: string,
+		limit: number,
+		onProgress: (progress: HybridCurationProgress) => void,
+		onComplete: (trackIds: string[]) => void,
+		onError: (error: string) => void
+	): () => void {
+		const token = getAuthToken();
+		if (!token) {
+			onError('Not authenticated');
+			return () => {};
+		}
+
+		// Build URL with query params for SSE (EventSource only supports GET)
+		const url = new URL(`${API_BASE}/ai/hybrid-curate-stream`, window.location.origin);
+		url.searchParams.set('token', token);
+		url.searchParams.set('query', query);
+		url.searchParams.set('limit', limit.toString());
+
+		const eventSource = new EventSource(url.toString());
+
+		eventSource.onmessage = (event) => {
+			try {
+				const data: HybridCurationProgress = JSON.parse(event.data);
+				onProgress(data);
+
+				// Check for completion with track_ids
+				if (data.step === 'completed' && data.track_ids) {
+					onComplete(data.track_ids);
+					eventSource.close();
+				}
+
+				// Check for error
+				if (data.step === 'error') {
+					onError(data.message);
+					eventSource.close();
+				}
+			} catch (e) {
+				console.warn('Failed to parse SSE message:', event.data);
+			}
+		};
+
+		eventSource.onerror = (e) => {
+			console.error('SSE error:', e);
+			onError('Connection error');
+			eventSource.close();
+		};
+
+		// Return cleanup function
+		return () => eventSource.close();
+	},
+
+	// Two-phase curation APIs
+	async selectSeeds(query: string, seedCount?: number): Promise<SelectSeedsResponse> {
+		return request('/ai/select-seeds', {
+			method: 'POST',
+			body: JSON.stringify({ query, seed_count: seedCount })
+		});
+	},
+
+	async regenerateSeed(query: string, position: number, excludeIds: string[]): Promise<{ seed: SeedTrack; position: number }> {
+		return request('/ai/regenerate-seed', {
+			method: 'POST',
+			body: JSON.stringify({ query, position, exclude_ids: excludeIds })
+		});
+	},
+
+	async fillGaps(query: string, seedIds: string[], totalSize?: number): Promise<FillGapsResponse> {
+		return request('/ai/fill-gaps', {
+			method: 'POST',
+			body: JSON.stringify({ query, seed_ids: seedIds, total_size: totalSize })
+		});
+	},
+
+	// Embedding visualization
+	async getEmbeddingsForVisualization(limit?: number): Promise<EmbeddingVisualizationResponse> {
+		const params = limit ? `?limit=${limit}` : '';
+		return request(`/embeddings/visualization${params}`);
 	}
 };

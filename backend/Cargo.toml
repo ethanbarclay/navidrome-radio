@@ -62,8 +62,23 @@ governor = "0.6"
 # Validation
 validator = { version = "0.17", features = ["derive"] }
 
-# Audio (simplified for MVP - will use FFmpeg directly)
+# Audio processing
 bytes = "1.5"
+
+# ONNX Runtime for ML inference (audio encoder)
+# CoreML for Apple Neural Engine acceleration on macOS
+ort = { version = "2.0.0-rc.9", features = ["load-dynamic", "coreml"] }
+ndarray = "0.16"
+
+# Audio processing for mel spectrograms
+symphonia = { version = "0.5", features = ["all"] }
+rustfft = "6.2"
+
+# pgvector support (0.3.x is compatible with sqlx 0.7.x)
+pgvector = { version = "0.3", features = ["sqlx"] }
+
+# Decimal for database types
+rust_decimal = { version = "1.33", features = ["db-postgres"] }
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }

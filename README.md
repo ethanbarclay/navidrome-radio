@@ -7,6 +7,9 @@ AI-powered radio station platform that transforms your Navidrome music library i
 - **📻 Multiple Radio Stations** - Create unlimited virtual radio stations from your music library
 - **🎵 Synchronized Playback** - All listeners hear the same track at the same time
 - **🤖 AI-Powered Curation** - Intelligent track selection based on station descriptions (optional)
+- **🧠 ML Audio Similarity** - Audio embeddings for finding sonically similar tracks (optional)
+- **🎯 Hybrid Curation** - LLM selects perfect seed songs, ML fills gaps with similar tracks
+- **📊 Embedding Visualization** - Interactive 3D visualization of your music library
 - **📱 Mobile-First Design** - Beautiful responsive UI with system media controls (Android/iOS/macOS)
 - **👑 Admin Controls** - Create, start, stop stations and skip tracks
 - **⚡ Real-time Updates** - Live listener counts and now playing information
@@ -220,6 +223,8 @@ navidrome-radio/
 - TypeScript
 - Tailwind CSS 4
 - Media Session API
+- Plotly.js for embedding visualization
+- UMAP for dimensionality reduction
 
 **Backend:**
 - Rust with Axum framework
@@ -227,9 +232,11 @@ navidrome-radio/
 - Redis for caching
 - JWT authentication
 - Single binary with embedded frontend
+- ONNX Runtime for ML inference (audio encoder)
+- Symphonia for audio decoding
 
 **Infrastructure:**
-- PostgreSQL 16
+- PostgreSQL 16 with pgvector extension
 - Redis 7
 - Docker & Docker Compose
 
@@ -246,6 +253,8 @@ navidrome-radio/
 | `NAVIDROME_PASSWORD` | Navidrome password | - | Yes |
 | `JWT_SECRET` | JWT signing secret | - | Yes |
 | `ANTHROPIC_API_KEY` | Claude API (optional) | - | No |
+| `NAVIDROME_LIBRARY_PATH` | Path to music files for audio analysis | - | No |
+| `AUDIO_ENCODER_MODEL_PATH` | Path to ONNX audio encoder model | - | No |
 | `SERVER_HOST` | Bind address | `0.0.0.0` | No |
 | `SERVER_PORT` | Server port | `8000` | No |
 | `RUST_LOG` | Log level | `info` | No |
@@ -261,6 +270,39 @@ When creating a station, you can configure:
   - `ai_contextual`: AI-powered based on description (requires API key)
   - `ai_embeddings`: Similarity-based (requires API key)
   - `hybrid`: Mix of AI and random
+
+### ML Audio Features (Optional)
+
+Navidrome Radio supports ML-powered audio similarity for creating sonically coherent playlists. This requires:
+
+1. **ONNX Audio Encoder Model** - A pre-trained model that converts audio to 100-dimensional embeddings
+2. **Access to Music Files** - Direct filesystem access to your Navidrome music library
+3. **pgvector Extension** - PostgreSQL extension for vector similarity search (included in docker-compose)
+
+#### How Hybrid Curation Works
+
+1. **Seed Selection**: LLM analyzes your query (e.g., "relaxing acoustic music") and selects 5-10 perfect seed songs from your library
+2. **Genre Awareness**: LLM automatically determines relevant genres (Jazz, Ambient, Folk) instead of just using keywords
+3. **Gap Filling**: Audio encoder finds sonically similar tracks to place between seeds
+4. **Result**: A playlist that matches your query AND flows smoothly from track to track
+
+#### Setting Up Audio Embeddings
+
+```bash
+# 1. Set environment variables
+export NAVIDROME_LIBRARY_PATH=/path/to/your/music
+export AUDIO_ENCODER_MODEL_PATH=/path/to/audio_encoder.onnx
+
+# 2. Use pgvector-enabled PostgreSQL (already in docker-compose.yml)
+# Image: pgvector/pgvector:pg16
+
+# 3. In Admin Dashboard, click "Sync Library" then "Generate Audio Embeddings"
+# This analyzes your music files and stores embeddings for similarity search
+```
+
+#### Embedding Visualization
+
+The Admin Dashboard includes an interactive 3D visualization of your music library based on audio embeddings. Tracks that sound similar appear closer together, letting you explore your library's sonic landscape.
 
 ## 📡 API Reference
 

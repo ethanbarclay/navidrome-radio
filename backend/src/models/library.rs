@@ -237,6 +237,53 @@ pub enum SyncProgress {
     },
 }
 
+/// Progress update for audio embedding indexing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum EmbeddingProgress {
+    #[serde(rename = "started")]
+    Started {
+        message: String,
+        total_tracks: usize,
+    },
+    #[serde(rename = "processing")]
+    Processing {
+        completed: usize,
+        total: usize,
+        success_count: usize,
+        error_count: usize,
+        in_progress: Vec<String>, // Track names currently being processed
+        message: String,
+    },
+    #[serde(rename = "track_complete")]
+    TrackComplete {
+        track_id: String,
+        track_name: String,
+        processing_time_ms: u64,
+        current: usize,
+        total: usize,
+    },
+    #[serde(rename = "track_error")]
+    TrackError {
+        track_id: String,
+        track_name: String,
+        error: String,
+        current: usize,
+        total: usize,
+    },
+    #[serde(rename = "completed")]
+    Completed {
+        success_count: usize,
+        error_count: usize,
+        total_time_secs: f64,
+        message: String,
+    },
+    #[serde(rename = "error")]
+    Error {
+        message: String,
+    },
+}
+
 /// Progress update for AI curation operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "step")]

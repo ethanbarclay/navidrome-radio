@@ -43,6 +43,12 @@ pub enum AppError {
     #[error("Streaming error: {0}")]
     Streaming(String),
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Internal server error: {0}")]
+    InternalMessage(String),
+
     #[error("Internal server error")]
     Internal(#[from] anyhow::Error),
 }
@@ -69,6 +75,11 @@ impl IntoResponse for AppError {
             AppError::ExternalApi(msg) => (StatusCode::BAD_GATEWAY, msg),
             AppError::Navidrome(msg) => (StatusCode::BAD_GATEWAY, msg),
             AppError::Streaming(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::InternalMessage(msg) => {
+                tracing::error!("Internal error: {}", msg);
+                (StatusCode::INTERNAL_SERVER_ERROR, msg)
+            }
             AppError::Internal(ref e) => {
                 tracing::error!("Internal error: {:?}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())

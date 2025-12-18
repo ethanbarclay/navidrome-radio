@@ -2,7 +2,10 @@ use crate::api::middleware::{RequireAdmin, RequireAuth};
 use crate::error::{AppError, Result};
 use crate::models::{CreateStationRequest, CurationProgress, NowPlaying, Station, UpdateStationRequest};
 use crate::services::{
-    library_indexer::LibraryIndexer, AiCurator, AuthService, CurationEngine, StationManager,
+    audio_encoder::AudioEncoder,
+    hybrid_curator::HybridCurator,
+    library_indexer::LibraryIndexer,
+    AiCurator, AuthService, CurationEngine, StationManager,
 };
 use axum::{
     extract::{Path, State},
@@ -19,6 +22,21 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 use validator::Validate;
 
+/// State for controlling embedding indexing
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingControlState {
+    Idle,
+    Running,
+    Paused,
+    Stopping,
+}
+
+impl Default for EmbeddingControlState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
 pub struct AppState {
     pub db: PgPool,
     pub auth_service: Arc<AuthService>,
@@ -26,6 +44,10 @@ pub struct AppState {
     pub curation_engine: Arc<CurationEngine>,
     pub library_indexer: Arc<LibraryIndexer>,
     pub ai_curator: Option<Arc<AiCurator>>,
+    pub audio_encoder: Option<Arc<AudioEncoder>>,
+    pub hybrid_curator: Option<Arc<HybridCurator>>,
+    pub navidrome_library_path: Option<String>,
+    pub embedding_control: Arc<tokio::sync::RwLock<EmbeddingControlState>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -332,26 +354,23 @@ async fn get_station_tracks(
         .await?
         .ok_or_else(|| AppError::NotFound("Station not found".to_string()))?;
 
-    // If station has curated track_ids, show those
+    // If station has curated track_ids, show those in the original curated order
     if !station.track_ids.is_empty() {
         let track_ids = &station.track_ids;
         let total = track_ids.len() as i64;
 
-        // Get track details from library_index for the curated tracks
-        // Build a query with placeholders for each track_id
-        if track_ids.is_empty() {
-            return Ok(Json(StationTracksResponse {
-                tracks: vec![],
-                total: 0,
-            }));
-        }
-
-        // Use ANY for array matching
+        // Get track details from library_index, preserving the curated order
+        // We use a CTE with ordinality to maintain the exact playlist order
         let rows = sqlx::query(
             r#"
-            SELECT id, title, artist, album
-            FROM library_index
-            WHERE id = ANY($1)
+            WITH ordered_ids AS (
+                SELECT id, ord
+                FROM UNNEST($1::text[]) WITH ORDINALITY AS t(id, ord)
+            )
+            SELECT li.id, li.title, li.artist, li.album, oi.ord
+            FROM ordered_ids oi
+            JOIN library_index li ON li.id = oi.id
+            ORDER BY oi.ord
             LIMIT $2
             "#,
         )
@@ -369,7 +388,7 @@ async fn get_station_tracks(
                     title: row.get("title"),
                     artist: row.get("artist"),
                     album: row.get("album"),
-                    played_at: None, // Curated tracks haven't been played yet
+                    played_at: None, // Curated tracks - order is the playlist order
                 }
             })
             .collect();

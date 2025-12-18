@@ -100,70 +100,72 @@ impl LibraryIndexer {
     }
 
     async fn perform_full_sync(&self, progress_tx: Option<tokio::sync::broadcast::Sender<crate::models::SyncProgress>>) -> Result<usize> {
-        // Get all songs from Navidrome using getRandomSongs
-        // We request a large number to get all songs (most libraries have < 50000 tracks)
-        // Note: This is a workaround since search3 doesn't support wildcards properly
-        let batch_size = 5000;
-        let max_iterations = 20; // Max 100,000 tracks (20 * 5000)
-        let mut all_track_ids = std::collections::HashSet::new();
+        // Use paginated API to get ALL songs from Navidrome
+        let page_size = 500;
+        let mut offset = 0;
         let mut total_synced = 0;
+        let mut total_count = 0;
 
-        info!("Starting full library sync using random song batches");
+        info!("Starting full library sync using paginated API");
 
-        // Fetch songs in batches until we stop getting new unique tracks
-        for iteration in 0..max_iterations {
+        loop {
             // Send fetching event
             if let Some(tx) = &progress_tx {
                 let _ = tx.send(crate::models::SyncProgress::Fetching {
-                    iteration: iteration + 1,
-                    message: format!("Fetching batch {} from Navidrome...", iteration + 1),
+                    iteration: (offset / page_size) + 1,
+                    message: format!("Fetching songs {} - {} from Navidrome...", offset, offset + page_size),
                 });
             }
 
-            let tracks = self
-                .navidrome_client
-                .get_random_songs(batch_size)
-                .await
-                .unwrap_or_else(|e| {
-                    warn!("Failed to fetch tracks in iteration {}: {}", iteration, e);
-                    Vec::new()
-                });
+            let (tracks, count) = match self.navidrome_client.get_all_songs_paginated(page_size, offset).await {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!("Failed to fetch tracks at offset {}: {}", offset, e);
+                    break;
+                }
+            };
+
+            if total_count == 0 {
+                total_count = count;
+                info!("Navidrome reports {} total songs", total_count);
+
+                // Update total in database
+                sqlx::query!(
+                    "UPDATE library_sync_status SET total_tracks_in_navidrome = $1 WHERE id = 1",
+                    total_count as i32
+                )
+                .execute(&self.db)
+                .await?;
+            }
 
             if tracks.is_empty() {
-                warn!("No tracks returned from Navidrome");
+                info!("No more tracks to fetch");
                 break;
             }
 
-            let mut new_tracks_count = 0;
+            let batch_count = tracks.len();
 
-            // Only upsert tracks we haven't seen before
+            // Upsert all tracks
             for track in &tracks {
-                if all_track_ids.insert(track.id.clone()) {
-                    if let Err(e) = self.upsert_track(track).await {
-                        warn!("Failed to upsert track {}: {}", track.id, e);
-                    } else {
-                        new_tracks_count += 1;
-                    }
+                if let Err(e) = self.upsert_track(track).await {
+                    warn!("Failed to upsert track {}: {}", track.id, e);
+                } else {
+                    total_synced += 1;
                 }
             }
 
-            total_synced = all_track_ids.len();
-
             info!(
-                "Iteration {}: Fetched {} tracks, {} new, {} total unique",
-                iteration + 1,
-                tracks.len(),
-                new_tracks_count,
-                total_synced
+                "Synced {} tracks (offset {}, batch size {}), {} / {} total",
+                batch_count, offset, page_size, total_synced, total_count
             );
 
             // Send processing event
             if let Some(tx) = &progress_tx {
                 let _ = tx.send(crate::models::SyncProgress::Processing {
                     current: total_synced,
-                    total: total_synced, // We don't know the total yet
-                    new_tracks: new_tracks_count,
-                    message: format!("Processed batch {}: {} total tracks ({} new)", iteration + 1, total_synced, new_tracks_count),
+                    total: total_count,
+                    new_tracks: batch_count,
+                    message: format!("Synced {} / {} tracks", total_synced, total_count),
                 });
             }
 
@@ -174,14 +176,15 @@ impl LibraryIndexer {
             .execute(&self.db)
             .await?;
 
-            // If we got very few new tracks (< 5% of batch), we likely have them all
-            if new_tracks_count < batch_size / 20 {
-                info!("Got {} new tracks (< 5% of batch size), assuming we have all tracks", new_tracks_count);
+            offset += page_size;
+
+            // Stop if we've fetched all tracks
+            if offset >= total_count {
                 break;
             }
         }
 
-        info!("Synced {} total unique tracks", total_synced);
+        info!("Synced {} total tracks", total_synced);
 
         // Update sync timestamp
         sqlx::query!(
@@ -200,9 +203,9 @@ impl LibraryIndexer {
         sqlx::query!(
             r#"
             INSERT INTO library_index (
-                id, title, artist, album, year, duration, genres, last_synced
+                id, title, artist, album, year, duration, genres, path, last_synced
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title,
                 artist = EXCLUDED.artist,
@@ -210,6 +213,7 @@ impl LibraryIndexer {
                 year = EXCLUDED.year,
                 duration = EXCLUDED.duration,
                 genres = EXCLUDED.genres,
+                path = EXCLUDED.path,
                 last_synced = NOW()
             "#,
             track.id,
@@ -218,7 +222,8 @@ impl LibraryIndexer {
             track.album,
             track.year,
             track.duration,
-            genres_json
+            genres_json,
+            track.path
         )
         .execute(&self.db)
         .await?;

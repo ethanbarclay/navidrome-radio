@@ -3,16 +3,20 @@ use crate::models::Track;
 use chrono::Utc;
 use rand::Rng;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Deserialize;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
 pub struct NavidromeClient {
     base_url: String,
     username: String,
+    password: String,  // Store original password for native API
     token: String,
     salt: String,
     client: Client,
+    /// Cached JWT token for native API (shared across clones)
+    jwt_cache: Arc<RwLock<Option<String>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +74,35 @@ struct NavidromeSong {
     path: String,
 }
 
+/// Navidrome Native API response for /api/song
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeApiSong {
+    id: String,
+    title: String,
+    artist: String,
+    album: String,
+    #[serde(default)]
+    genre: String,
+    #[serde(default)]
+    genres: Vec<NativeApiGenre>,
+    year: Option<i32>,
+    duration: f64,  // Native API returns duration as float
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeApiGenre {
+    id: String,
+    name: String,
+}
+
+/// Login response from Navidrome's /auth/login endpoint
+#[derive(Debug, Deserialize)]
+struct LoginResponse {
+    token: String,
+}
+
 impl NavidromeClient {
     pub fn new(base_url: String, username: String, password: String) -> Self {
         let salt = Self::generate_salt();
@@ -78,9 +111,11 @@ impl NavidromeClient {
         Self {
             base_url,
             username,
+            password,  // Store for native API auth
             token,
             salt,
             client: Client::new(),
+            jwt_cache: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -89,6 +124,60 @@ impl NavidromeClient {
         (0..8)
             .map(|_| format!("{:x}", rng.gen::<u8>()))
             .collect()
+    }
+
+    /// Login to Navidrome's native API to get a JWT token (cached)
+    async fn get_jwt_token(&self) -> Result<String> {
+        // Check cache first
+        {
+            let cache = self.jwt_cache.read().await;
+            if let Some(token) = cache.as_ref() {
+                return Ok(token.clone());
+            }
+        }
+
+        // No cached token, perform login
+        let url = format!("{}/auth/login", self.base_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({
+                "username": self.username,
+                "password": self.password
+            }))
+            .send()
+            .await
+            .map_err(|e| AppError::Navidrome(format!("Login request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::Navidrome(format!(
+                "Login failed: {} - {}",
+                status, body
+            )));
+        }
+
+        let login_response: LoginResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::Navidrome(format!("Failed to parse login response: {}", e)))?;
+
+        // Cache the token
+        {
+            let mut cache = self.jwt_cache.write().await;
+            *cache = Some(login_response.token.clone());
+        }
+
+        Ok(login_response.token)
+    }
+
+    /// Clear the cached JWT token (useful if it expires)
+    #[allow(dead_code)]
+    pub async fn clear_jwt_cache(&self) {
+        let mut cache = self.jwt_cache.write().await;
+        *cache = None;
     }
 
     fn build_params(&self, additional: Vec<(&str, &str)>) -> Vec<(String, String)> {
@@ -263,7 +352,7 @@ impl NavidromeClient {
         let url = format!("{}/rest/getGenres", self.base_url);
         let params = self.build_params(vec![]);
 
-        let response = self
+        let _response = self
             .client
             .get(&url)
             .query(&params)
@@ -282,6 +371,93 @@ impl NavidromeClient {
             "Blues".to_string(),
             "Country".to_string(),
         ])
+    }
+
+    /// Get all songs from Navidrome using the native API with pagination
+    /// This is more reliable than getRandomSongs for large libraries
+    pub async fn get_all_songs_paginated(&self, page_size: usize, offset: usize) -> Result<(Vec<Track>, usize)> {
+        // Get JWT token for native API authentication
+        let jwt_token = self.get_jwt_token().await?;
+
+        // Use Navidrome's native API endpoint which supports proper pagination
+        let url = format!("{}/api/song", self.base_url);
+
+        tracing::debug!("Fetching songs from Navidrome native API: offset={}, size={}", offset, page_size);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("x-nd-authorization", format!("Bearer {}", jwt_token))
+            .query(&[
+                ("_start", offset.to_string()),
+                ("_end", (offset + page_size).to_string()),
+                ("_order", "ASC".to_string()),
+                ("_sort", "id".to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|e| AppError::Navidrome(format!("Request failed: {}", e)))?;
+
+        // Get total count from header
+        let total_count = response
+            .headers()
+            .get("x-total-count")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::error!("Navidrome native API error: {} - {}", status, body);
+            return Err(AppError::Navidrome(format!(
+                "Native API returned status: {} - {}",
+                status, body
+            )));
+        }
+
+        let response_text = response.text().await.map_err(|e| {
+            AppError::Navidrome(format!("Failed to read response: {}", e))
+        })?;
+
+        let songs: Vec<NativeApiSong> = serde_json::from_str(&response_text)
+            .map_err(|e| {
+                AppError::Navidrome(format!(
+                    "Failed to parse native API response: {} - Response: {}",
+                    e,
+                    &response_text[..std::cmp::min(200, response_text.len())]
+                ))
+            })?;
+
+        tracing::debug!("Native API returned {} songs, total: {}", songs.len(), total_count);
+
+        let tracks = songs
+            .into_iter()
+            .map(|song| {
+                let genres = if !song.genres.is_empty() {
+                    song.genres.into_iter().map(|g| g.name).collect()
+                } else if !song.genre.is_empty() {
+                    vec![song.genre]
+                } else {
+                    vec![]
+                };
+
+                Track {
+                    id: song.id,
+                    title: song.title,
+                    artist: song.artist,
+                    album: song.album,
+                    genre: genres,
+                    year: song.year,
+                    duration: song.duration as i32,
+                    path: song.path,
+                    metadata: None,
+                    last_synced: Utc::now(),
+                }
+            })
+            .collect();
+
+        Ok((tracks, total_count))
     }
 
     /// Get a single track by ID

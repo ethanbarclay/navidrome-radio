@@ -116,6 +116,15 @@ impl AuthService {
         Ok(token_data.claims)
     }
 
+    /// Validate that a token belongs to an admin user
+    pub async fn validate_admin_token(&self, token: &str) -> Result<Claims> {
+        let claims = self.verify_token(token).await?;
+        if claims.role != UserRole::Admin {
+            return Err(AppError::Forbidden);
+        }
+        Ok(claims)
+    }
+
     pub async fn get_user_by_id(&self, user_id: Uuid) -> Result<User> {
         sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
             .bind(user_id)
