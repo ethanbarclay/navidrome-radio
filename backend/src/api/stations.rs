@@ -5,7 +5,7 @@ use crate::services::{
     audio_encoder::AudioEncoder,
     hybrid_curator::HybridCurator,
     library_indexer::LibraryIndexer,
-    AiCurator, AuthService, CurationEngine, StationManager,
+    AiCurator, AuthService, CurationEngine, NavidromeClient, StationManager,
 };
 use axum::{
     extract::{Path, State},
@@ -46,6 +46,7 @@ pub struct AppState {
     pub ai_curator: Option<Arc<AiCurator>>,
     pub audio_encoder: Option<Arc<AudioEncoder>>,
     pub hybrid_curator: Option<Arc<HybridCurator>>,
+    pub navidrome_client: Arc<NavidromeClient>,
     pub navidrome_library_path: Option<String>,
     pub embedding_control: Arc<tokio::sync::RwLock<EmbeddingControlState>>,
 }
@@ -78,6 +79,7 @@ pub fn station_routes() -> Router<Arc<AppState>> {
         .route("/stations/:id/skip", post(skip_track))
         .route("/stations/:id/nowplaying", get(now_playing))
         .route("/stations/:id/tracks", get(get_station_tracks))
+        .route("/stations/:id/playlist", post(create_navidrome_playlist))
         .route("/stations/:id/listener/heartbeat", post(listener_heartbeat))
         .route("/stations/:id/listener/leave", post(listener_leave))
         .route("/ai/capabilities", get(ai_capabilities))
@@ -440,6 +442,69 @@ async fn get_station_tracks(
     .await?;
 
     Ok(Json(StationTracksResponse { tracks, total }))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatePlaylistRequest {
+    name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreatePlaylistResponse {
+    playlist_id: String,
+    name: String,
+    track_count: usize,
+}
+
+/// Create a Navidrome playlist from a station's tracks
+async fn create_navidrome_playlist(
+    State(state): State<Arc<AppState>>,
+    RequireAdmin(_): RequireAdmin,
+    Path(id): Path<Uuid>,
+    Json(req): Json<CreatePlaylistRequest>,
+) -> Result<Json<CreatePlaylistResponse>> {
+    // Get the station
+    let station = sqlx::query_as::<_, Station>("SELECT * FROM stations WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Station not found".to_string()))?;
+
+    // Get track IDs - prefer curated tracks, fall back to playlist history
+    let track_ids: Vec<String> = if !station.track_ids.is_empty() {
+        station.track_ids.clone()
+    } else {
+        // Get from playlist history
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT track_id FROM playlist_history WHERE station_id = $1 ORDER BY played_at DESC LIMIT 200"
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await?;
+
+        rows.into_iter().map(|(id,)| id).collect()
+    };
+
+    if track_ids.is_empty() {
+        return Err(AppError::Validation("Station has no tracks to export".to_string()));
+    }
+
+    // Generate playlist name if not provided
+    let playlist_name = req.name.unwrap_or_else(|| {
+        format!("{} - Radio", station.name)
+    });
+
+    // Create the playlist in Navidrome
+    let playlist_id = state
+        .navidrome_client
+        .create_playlist(&playlist_name, &track_ids)
+        .await?;
+
+    Ok(Json(CreatePlaylistResponse {
+        playlist_id,
+        name: playlist_name,
+        track_count: track_ids.len(),
+    }))
 }
 
 async fn ai_capabilities(State(state): State<Arc<AppState>>) -> Result<Json<AiCapabilities>> {

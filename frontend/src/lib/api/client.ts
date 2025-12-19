@@ -396,6 +396,18 @@ export const api = {
 		return request(`/stations/${stationId}/tracks${params}`);
 	},
 
+	// Create Navidrome playlist from station tracks
+	async createNavidromePlaylist(stationId: string, name?: string): Promise<{
+		playlist_id: string;
+		name: string;
+		track_count: number;
+	}> {
+		return request(`/stations/${stationId}/playlist`, {
+			method: 'POST',
+			body: JSON.stringify({ name })
+		});
+	},
+
 	// Get track details by IDs
 	async getTracksByIds(ids: string[]): Promise<{
 		tracks: Array<{ id: string; title: string; artist: string; album: string }>;

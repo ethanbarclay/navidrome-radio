@@ -460,6 +460,81 @@ impl NavidromeClient {
         Ok((tracks, total_count))
     }
 
+    /// Create a playlist in Navidrome with the given name and track IDs
+    pub async fn create_playlist(&self, name: &str, track_ids: &[String]) -> Result<String> {
+        let url = format!("{}/rest/createPlaylist", self.base_url);
+
+        // Build base params
+        let mut params = self.build_params(vec![("name", name)]);
+
+        // Add each track ID as a separate songId parameter
+        for track_id in track_ids {
+            params.push(("songId".to_string(), track_id.clone()));
+        }
+
+        tracing::info!("Creating Navidrome playlist '{}' with {} tracks", name, track_ids.len());
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| AppError::Navidrome(format!("Request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::error!("Navidrome createPlaylist error: {} - {}", status, body);
+            return Err(AppError::Navidrome(format!(
+                "Failed to create playlist: {} - {}",
+                status, body
+            )));
+        }
+
+        let response_text = response.text().await.map_err(|e| {
+            AppError::Navidrome(format!("Failed to read response: {}", e))
+        })?;
+
+        tracing::debug!("createPlaylist response: {}", response_text);
+
+        // Parse the response to get the playlist ID
+        // The response format is: {"subsonic-response":{"status":"ok","playlist":{"id":"..."}}}
+        #[derive(Deserialize)]
+        struct CreatePlaylistResponse {
+            status: String,
+            #[serde(default)]
+            playlist: Option<PlaylistInfo>,
+        }
+
+        #[derive(Deserialize)]
+        struct PlaylistInfo {
+            id: String,
+        }
+
+        let data: SubsonicResponse<CreatePlaylistResponse> = serde_json::from_str(&response_text)
+            .map_err(|e| {
+                AppError::Navidrome(format!(
+                    "Failed to parse createPlaylist response: {} - Response: {}",
+                    e,
+                    &response_text[..std::cmp::min(200, response_text.len())]
+                ))
+            })?;
+
+        if data.subsonic_response.status != "ok" {
+            return Err(AppError::Navidrome("Playlist creation failed".to_string()));
+        }
+
+        let playlist_id = data
+            .subsonic_response
+            .playlist
+            .map(|p| p.id)
+            .unwrap_or_else(|| "unknown".to_string());
+
+        tracing::info!("Created playlist '{}' with ID: {}", name, playlist_id);
+        Ok(playlist_id)
+    }
+
     /// Get a single track by ID
     pub async fn get_track(&self, track_id: &str) -> Result<Track> {
         let url = format!("{}/rest/getSong", self.base_url);

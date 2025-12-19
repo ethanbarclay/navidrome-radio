@@ -475,6 +475,35 @@
 		}
 	}
 
+	// Playlist creation state
+	let creatingPlaylist = $state<string | null>(null);
+	let playlistSuccess = $state<{ stationId: string; name: string; trackCount: number } | null>(null);
+
+	async function handleCreatePlaylist(stationId: string, stationName: string) {
+		creatingPlaylist = stationId;
+		playlistSuccess = null;
+
+		try {
+			const result = await api.createNavidromePlaylist(stationId);
+			playlistSuccess = {
+				stationId,
+				name: result.name,
+				trackCount: result.track_count
+			};
+			// Auto-dismiss success after 5 seconds
+			setTimeout(() => {
+				if (playlistSuccess?.stationId === stationId) {
+					playlistSuccess = null;
+				}
+			}, 5000);
+		} catch (e) {
+			console.error('Failed to create playlist:', e);
+			alert(e instanceof Error ? e.message : 'Failed to create playlist');
+		} finally {
+			creatingPlaylist = null;
+		}
+	}
+
 	async function toggleStationTracks(stationId: string) {
 		if (expandedStationId === stationId) {
 			expandedStationId = null;
@@ -1367,6 +1396,22 @@
 							</button>
 
 							<button
+								onclick={() => handleCreatePlaylist(station.id, station.name)}
+								disabled={creatingPlaylist === station.id}
+								class="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-800 disabled:cursor-wait text-white text-sm rounded-lg whitespace-nowrap flex items-center gap-1"
+							>
+								{#if creatingPlaylist === station.id}
+									<svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+										<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+										<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+									</svg>
+									Creating...
+								{:else}
+									Export Playlist
+								{/if}
+							</button>
+
+							<button
 								onclick={() => handleDeleteStation(station.id)}
 								class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg whitespace-nowrap"
 							>
@@ -1374,6 +1419,16 @@
 							</button>
 						</div>
 					</div>
+
+					<!-- Playlist creation success message -->
+					{#if playlistSuccess?.stationId === station.id}
+						<div class="mt-2 p-3 bg-teal-900/50 border border-teal-700 rounded-lg text-teal-300 text-sm flex items-center gap-2">
+							<svg class="w-5 h-5 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+							</svg>
+							Created playlist "{playlistSuccess.name}" with {playlistSuccess.trackCount} tracks in Navidrome
+						</div>
+					{/if}
 
 					<!-- Expandable Tracks Section -->
 					{#if expandedStationId === station.id}

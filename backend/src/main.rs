@@ -133,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         ai_curator: ai_curator.clone(),
         audio_encoder,
         hybrid_curator,
+        navidrome_client: navidrome_client.clone(),
         navidrome_library_path: config.navidrome_library_path.clone(),
         embedding_control: Arc::new(tokio::sync::RwLock::new(
             crate::api::stations::EmbeddingControlState::default(),
