@@ -51,8 +51,8 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# ONNX Runtime version
-ARG ORT_VERSION=1.19.2
+# ONNX Runtime version (must match ort crate expectation - 1.22.x for ort 2.0.0-rc.10)
+ARG ORT_VERSION=1.22.0
 ARG TARGETARCH
 
 # Install runtime dependencies and ONNX Runtime
