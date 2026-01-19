@@ -74,6 +74,9 @@ ndarray = "0.16"
 symphonia = { version = "0.5", features = ["all"] }
 rustfft = "6.2"
 
+# MP3 encoding for HLS streaming
+mp3lame-encoder = "0.1"
+
 # pgvector support (0.3.x is compatible with sqlx 0.7.x)
 pgvector = { version = "0.3", features = ["sqlx"] }
 

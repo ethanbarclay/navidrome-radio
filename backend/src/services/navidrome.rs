@@ -119,6 +119,34 @@ impl NavidromeClient {
         }
     }
 
+    /// Get the base URL for constructing API endpoints
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Get the HTTP client for making requests
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    /// Build Subsonic API parameters (public for use by other services)
+    pub fn build_params(&self, additional: Vec<(&str, &str)>) -> Vec<(String, String)> {
+        let mut params = vec![
+            ("u".to_string(), self.username.clone()),
+            ("t".to_string(), self.token.clone()),
+            ("s".to_string(), self.salt.clone()),
+            ("v".to_string(), "1.16.1".to_string()),
+            ("c".to_string(), "navidrome-radio".to_string()),
+            ("f".to_string(), "json".to_string()),
+        ];
+
+        for (key, value) in additional {
+            params.push((key.to_string(), value.to_string()));
+        }
+
+        params
+    }
+
     fn generate_salt() -> String {
         let mut rng = rand::thread_rng();
         (0..8)
@@ -178,23 +206,6 @@ impl NavidromeClient {
     pub async fn clear_jwt_cache(&self) {
         let mut cache = self.jwt_cache.write().await;
         *cache = None;
-    }
-
-    fn build_params(&self, additional: Vec<(&str, &str)>) -> Vec<(String, String)> {
-        let mut params = vec![
-            ("u".to_string(), self.username.clone()),
-            ("t".to_string(), self.token.clone()),
-            ("s".to_string(), self.salt.clone()),
-            ("v".to_string(), "1.16.1".to_string()),
-            ("c".to_string(), "navidrome-radio".to_string()),
-            ("f".to_string(), "json".to_string()),
-        ];
-
-        for (key, value) in additional {
-            params.push((key.to_string(), value.to_string()));
-        }
-
-        params
     }
 
     pub async fn search_tracks(&self, query: &str, count: usize) -> Result<Vec<Track>> {

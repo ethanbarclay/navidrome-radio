@@ -7,61 +7,58 @@
 
 	let { children } = $props();
 
+	// Check if we're on the homepage
+	let isHomePage = $derived($page.url.pathname === '/');
+
 	onMount(() => {
 		authStore.init();
 	});
 </script>
 
 {#if authStore.loading}
-	<div class="min-h-screen flex items-center justify-center">
-		<div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+	<div class="loading-screen">
+		<span class="loading-text">LOADING...</span>
 	</div>
+{:else if isHomePage}
+	<!-- Homepage has its own full layout -->
+	{@render children()}
 {:else}
-	<div class="min-h-screen bg-gray-900">
-		<!-- Navigation -->
-		<nav class="bg-gray-800 border-b border-gray-700">
-			<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-				<div class="flex items-center justify-between h-16">
-					<div class="flex items-center">
-						<a href="/" class="text-xl font-bold text-white">Navidrome Radio</a>
-					</div>
-
-					<div class="flex items-center gap-4">
-						{#if authStore.isAuthenticated}
-							{#if authStore.isAdmin}
-								<a
-									href="/admin"
-									class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
-								>
-									Admin
-								</a>
-							{/if}
-							<span class="text-gray-400 text-sm">{authStore.user?.username}</span>
-							<button
-								onclick={() => {
-									authStore.logout();
-									goto('/login');
-								}}
-								class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium"
-							>
-								Logout
-							</button>
-						{:else}
-							<a
-								href="/login"
-								class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
-							>
-								Login
-							</a>
-						{/if}
-					</div>
-				</div>
-			</div>
-		</nav>
-
-		<!-- Main content -->
-		<main>
-			{@render children()}
-		</main>
+	<div class="app-container">
+		{@render children()}
 	</div>
 {/if}
+
+<style>
+	:global(html), :global(body) {
+		margin: 0;
+		padding: 0;
+		height: 100%;
+		overflow: hidden;
+		background: #0a0a0a;
+		color: #e0e0e0;
+		font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+	}
+
+	.loading-screen {
+		height: 100vh;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: #0a0a0a;
+	}
+
+	.loading-text {
+		color: #00ff88;
+		font-size: 1rem;
+		animation: blink 1s infinite;
+	}
+
+	@keyframes blink {
+		50% { opacity: 0.5; }
+	}
+
+	.app-container {
+		min-height: 100vh;
+		background: #0a0a0a;
+	}
+</style>

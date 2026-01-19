@@ -138,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
         embedding_control: Arc::new(tokio::sync::RwLock::new(
             crate::api::stations::EmbeddingControlState::default(),
         )),
+        station_broadcasters: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     });
 
     // Load active stations on startup

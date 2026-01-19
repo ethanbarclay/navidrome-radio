@@ -2,22 +2,26 @@ use crate::api::middleware::{RequireAdmin, RequireAuth};
 use crate::error::{AppError, Result};
 use crate::models::{CreateStationRequest, CurationProgress, NowPlaying, Station, UpdateStationRequest};
 use crate::services::{
+    audio_broadcaster::{AudioBroadcaster, AudioBroadcasterConfig, VisualizationData},
     audio_encoder::AudioEncoder,
+    audio_pipeline::{AudioPipeline, AudioPipelineConfig, QueuedTrack},
     hybrid_curator::HybridCurator,
     library_indexer::LibraryIndexer,
     AiCurator, AuthService, CurationEngine, NavidromeClient, StationManager,
 };
 use axum::{
+    body::Body,
     extract::{Path, State},
-    response::sse::{Event, KeepAlive, Sse},
+    http::{header, StatusCode},
+    response::{sse::{Event, KeepAlive, Sse}, Response},
     routing::{get, post},
     Json, Router,
 };
 use futures::{stream::Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::{convert::Infallible, sync::Arc};
-use tokio::sync::mpsc;
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use tokio::sync::{mpsc, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 use validator::Validate;
@@ -49,6 +53,8 @@ pub struct AppState {
     pub navidrome_client: Arc<NavidromeClient>,
     pub navidrome_library_path: Option<String>,
     pub embedding_control: Arc<tokio::sync::RwLock<EmbeddingControlState>>,
+    /// Per-station audio broadcasters for HLS streaming
+    pub station_broadcasters: Arc<RwLock<HashMap<Uuid, Arc<AudioBroadcaster>>>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +88,10 @@ pub fn station_routes() -> Router<Arc<AppState>> {
         .route("/stations/:id/playlist", post(create_navidrome_playlist))
         .route("/stations/:id/listener/heartbeat", post(listener_heartbeat))
         .route("/stations/:id/listener/leave", post(listener_leave))
+        // HLS Streaming endpoints
+        .route("/stations/:id/stream/playlist.m3u8", get(get_hls_playlist))
+        .route("/stations/:id/stream/segment/:seq", get(get_hls_segment))
+        .route("/stations/:id/stream/visualization", get(visualization_sse))
         .route("/ai/capabilities", get(ai_capabilities))
         .route("/ai/analyze-description", post(analyze_description))
         .route("/ai/curate", post(curate_tracks_sse))
@@ -259,6 +269,19 @@ async fn skip_track(
     RequireAdmin(_): RequireAdmin,
     Path(id): Path<Uuid>,
 ) -> Result<Json<()>> {
+    // Check if there's an active HLS broadcaster - if so, skip in the pipeline
+    {
+        let broadcasters = state.station_broadcasters.read().await;
+        if let Some(broadcaster) = broadcasters.get(&id) {
+            if broadcaster.is_running() {
+                broadcaster.skip().await?;
+                tracing::info!("Skipped track in HLS pipeline for station {}", id);
+                return Ok(Json(()));
+            }
+        }
+    }
+
+    // Fall back to station manager skip
     state.station_manager.skip_track(id).await?;
     Ok(Json(()))
 }
@@ -267,6 +290,93 @@ async fn now_playing(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<NowPlaying>> {
+    // Check if there's an active HLS broadcaster - if so, use its current track
+    {
+        let broadcasters = state.station_broadcasters.read().await;
+        if let Some(broadcaster) = broadcasters.get(&id) {
+            if broadcaster.is_running() {
+                // Try to get current track from broadcaster
+                let track_state = broadcaster.current_track().await;
+
+                // If broadcaster is running but no current track yet (cold start),
+                // wait briefly for the pipeline to start processing
+                let track_state = if track_state.is_none() {
+                    // Drop the read lock before sleeping
+                    drop(broadcasters);
+
+                    // Wait up to 2 seconds for track to be available
+                    let mut attempts = 0;
+                    loop {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                        attempts += 1;
+
+                        let broadcasters = state.station_broadcasters.read().await;
+                        if let Some(broadcaster) = broadcasters.get(&id) {
+                            if let Some(ts) = broadcaster.current_track().await {
+                                break Some(ts);
+                            }
+                        }
+
+                        if attempts >= 10 {
+                            tracing::debug!("Timeout waiting for broadcaster current track");
+                            break None;
+                        }
+                    }
+                } else {
+                    track_state
+                };
+
+                if let Some(track_state) = track_state {
+                    // Fetch full track info from the database
+                    let row = sqlx::query(
+                        r#"
+                        SELECT id, title, artist, album, duration
+                        FROM library_index
+                        WHERE id = $1
+                        "#,
+                    )
+                    .bind(&track_state.track_id)
+                    .fetch_optional(&state.db)
+                    .await?;
+
+                    if let Some(row) = row {
+                        use sqlx::Row;
+                        let track_id: String = row.get("id");
+                        let info = crate::models::TrackInfo {
+                            id: track_id.clone(),
+                            title: row.get("title"),
+                            artist: row.get("artist"),
+                            album: row.get("album"),
+                            duration: row.get("duration"),
+                            album_art: Some(format!("/api/v1/navidrome/cover/{}", track_id)),
+                        };
+
+                        // Get listener count from station manager
+                        let listeners = state
+                            .station_manager
+                            .get_now_playing(id)
+                            .await
+                            .map(|np| np.listeners)
+                            .unwrap_or(0);
+
+                        // Account for HLS buffering latency (~6 seconds for 3 segments at 2s each)
+                        // The client is behind the server, so from the client's perspective
+                        // less of the track has played
+                        const HLS_LATENCY_SECS: i64 = 6;
+                        let client_position_secs = (track_state.position_secs as i64 - HLS_LATENCY_SECS).max(0);
+
+                        return Ok(Json(NowPlaying {
+                            track: info,
+                            started_at: chrono::Utc::now() - chrono::Duration::seconds(client_position_secs),
+                            listeners,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to station manager's now playing
     let np = state.station_manager.get_now_playing(id).await?;
     Ok(Json(np))
 }
@@ -617,6 +727,278 @@ async fn curate_tracks_sse(
         let data = serde_json::to_string(&progress).unwrap_or_else(|_| "{}".to_string());
         Ok(Event::default().data(data))
     });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+// ============================================================================
+// HLS Streaming Endpoints
+// ============================================================================
+
+/// Stored broadcaster with its pipeline for control
+pub struct StationBroadcaster {
+    pub pipeline: Arc<RwLock<AudioPipeline>>,
+    pub broadcaster: Arc<AudioBroadcaster>,
+}
+
+/// Get or create the broadcaster for a station
+async fn get_or_create_broadcaster(
+    state: &Arc<AppState>,
+    station_id: Uuid,
+) -> Result<Arc<AudioBroadcaster>> {
+    // Check if broadcaster already exists and is running
+    {
+        let broadcasters = state.station_broadcasters.read().await;
+        if let Some(broadcaster) = broadcasters.get(&station_id) {
+            if broadcaster.is_running() {
+                return Ok(broadcaster.clone());
+            }
+        }
+    }
+
+    // Get station and its tracks
+    let station = sqlx::query_as::<_, Station>("SELECT * FROM stations WHERE id = $1")
+        .bind(station_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Station not found".to_string()))?;
+
+    // Create new pipeline
+    let mut pipeline = AudioPipeline::new(
+        state.navidrome_client.clone(),
+        AudioPipelineConfig::default(),
+    );
+
+    // Queue tracks from the station's track list
+    if !station.track_ids.is_empty() {
+        // Get track info from library_index
+        let track_ids = &station.track_ids;
+        let rows = sqlx::query(
+            r#"
+            SELECT id, title, artist
+            FROM library_index
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(track_ids)
+        .fetch_all(&state.db)
+        .await?;
+
+        // Build a map of track_id -> (title, artist)
+        let track_info: std::collections::HashMap<String, (String, String)> = rows
+            .iter()
+            .map(|row| {
+                use sqlx::Row;
+                let id: String = row.get("id");
+                let title: String = row.get("title");
+                let artist: String = row.get("artist");
+                (id, (title, artist))
+            })
+            .collect();
+
+        // Queue tracks in order
+        for track_id in track_ids {
+            if let Some((title, artist)) = track_info.get(track_id) {
+                let queued = QueuedTrack {
+                    track_id: track_id.clone(),
+                    title: title.clone(),
+                    artist: artist.clone(),
+                };
+                pipeline.queue_track(queued).await?;
+            }
+        }
+
+        tracing::info!(
+            "Queued {} tracks for station {} HLS stream",
+            track_ids.len(),
+            station.name
+        );
+    } else {
+        // No curated tracks - get from current now playing or playlist history
+        let now_playing = state.station_manager.get_now_playing(station_id).await.ok();
+
+        if let Some(np) = now_playing {
+            let queued = QueuedTrack {
+                track_id: np.track.id.clone(),
+                title: np.track.title.clone(),
+                artist: np.track.artist.clone(),
+            };
+            pipeline.queue_track(queued).await?;
+            tracing::info!("Queued current track for station {} HLS stream", station.name);
+        } else {
+            tracing::warn!("No tracks available for station {} HLS stream", station.name);
+        }
+    }
+
+    // Start the pipeline
+    pipeline.start().await?;
+    tracing::info!("Started audio pipeline for station {}", station.name);
+
+    let pipeline_arc = Arc::new(pipeline);
+    let broadcaster = Arc::new(AudioBroadcaster::new(
+        pipeline_arc.clone(),
+        AudioBroadcasterConfig::default(),
+    ));
+
+    // Store it
+    {
+        let mut broadcasters = state.station_broadcasters.write().await;
+        broadcasters.insert(station_id, broadcaster.clone());
+    }
+
+    // Spawn a background task to keep the queue filled
+    let state_clone = state.clone();
+    let broadcaster_clone = broadcaster.clone();
+    let pipeline_for_refill = pipeline_arc.clone();
+    tokio::spawn(async move {
+        let station_id = station_id;
+        let mut last_queued_track_id: Option<String> = None;
+
+        loop {
+            // Check if broadcaster is still running
+            if !broadcaster_clone.is_running() {
+                tracing::debug!("Broadcaster stopped, ending refill task for station {}", station_id);
+                break;
+            }
+
+            // Check queue length
+            let queue_len = pipeline_for_refill.queue_length().await;
+
+            // If queue is running low (less than 2 tracks), add more
+            if queue_len < 2 {
+                // Get next track from station manager
+                match state_clone.station_manager.get_now_playing(station_id).await {
+                    Ok(np) => {
+                        // Only queue if it's a different track than last time
+                        let track_id = np.track.id.clone();
+                        if last_queued_track_id.as_ref() != Some(&track_id) {
+                            let queued = QueuedTrack {
+                                track_id: track_id.clone(),
+                                title: np.track.title.clone(),
+                                artist: np.track.artist.clone(),
+                            };
+                            if let Err(e) = pipeline_for_refill.queue_track(queued).await {
+                                tracing::error!("Failed to queue track for station {}: {:?}", station_id, e);
+                            } else {
+                                tracing::debug!("Refilled queue with track: {} for station {}", np.track.title, station_id);
+                                last_queued_track_id = Some(track_id);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Could not get now playing for refill: {:?}", e);
+                    }
+                }
+            }
+
+            // Wait before checking again
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        }
+        tracing::info!("Refill task ended for station {}", station_id);
+    });
+
+    Ok(broadcaster)
+}
+
+/// Get HLS playlist (m3u8) for a station
+async fn get_hls_playlist(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Response> {
+    // Verify station exists
+    let _station = sqlx::query_as::<_, Station>("SELECT * FROM stations WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Station not found".to_string()))?;
+
+    let broadcaster = get_or_create_broadcaster(&state, id).await?;
+
+    // Start broadcaster if not running
+    if !broadcaster.is_running() {
+        broadcaster.start().await?;
+    }
+
+    let playlist = broadcaster.get_playlist().await;
+
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
+        .header(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+        .body(Body::from(playlist))
+        .map_err(|e| AppError::InternalMessage(format!("Failed to build response: {}", e)))?;
+
+    Ok(response)
+}
+
+/// Get an HLS segment (audio chunk)
+async fn get_hls_segment(
+    State(state): State<Arc<AppState>>,
+    Path((id, seq_str)): Path<(Uuid, String)>,
+) -> Result<Response> {
+    // Strip .mp3 extension if present
+    let seq_clean = seq_str.trim_end_matches(".mp3");
+    let seq: u64 = seq_clean
+        .parse()
+        .map_err(|_| AppError::Validation(format!("Invalid segment number: {}", seq_str)))?;
+
+    let broadcaster = {
+        let broadcasters = state.station_broadcasters.read().await;
+        broadcasters
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound("Stream not found".to_string()))?
+    };
+
+    let segment = broadcaster
+        .get_segment(seq)
+        .await
+        .ok_or_else(|| AppError::NotFound("Segment not found".to_string()))?;
+
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::CACHE_CONTROL, "public, max-age=3600")
+        .body(Body::from(segment.data))
+        .map_err(|e| AppError::InternalMessage(format!("Failed to build response: {}", e)))?;
+
+    Ok(response)
+}
+
+/// SSE endpoint for real-time visualization data
+async fn visualization_sse(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
+    let broadcaster = {
+        let broadcasters = state.station_broadcasters.read().await;
+        broadcasters
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound("Stream not found".to_string()))?
+    };
+
+    let mut rx = broadcaster.subscribe_visualization();
+
+    // Convert broadcast receiver to SSE stream
+    let stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(viz) => {
+                    let data = serde_json::to_string(&viz).unwrap_or_else(|_| "{}".to_string());
+                    yield Ok(Event::default().data(data));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Receiver fell behind, continue
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Channel closed, end stream
+                    break;
+                }
+            }
+        }
+    };
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
