@@ -5,14 +5,99 @@
 
 use crate::error::{AppError, Result};
 use crate::services::audio_pipeline::{AudioPipeline, PipelineEvent, OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE};
-use mp3lame_encoder::{Builder, FlushNoGap, InterleavedPcm};
+use mp3lame_encoder::{Builder, InterleavedPcm};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::collections::VecDeque;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, RwLock, mpsc};
 use tracing::{debug, error, info, warn};
+
+/// Message sent to the encoder thread
+enum EncoderMessage {
+    /// Encode these samples and return MP3 data
+    Encode(Vec<f32>),
+    /// Reset the encoder (e.g., after skip)
+    Reset,
+    /// Shutdown the encoder thread
+    Shutdown,
+}
+
+/// Spawns a dedicated encoder thread that maintains encoder state for gapless encoding
+fn spawn_encoder_thread() -> (std::sync::mpsc::Sender<EncoderMessage>, std::sync::mpsc::Receiver<Vec<u8>>) {
+    let (sample_tx, sample_rx) = std::sync::mpsc::channel::<EncoderMessage>();
+    let (mp3_tx, mp3_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
+    std::thread::spawn(move || {
+        // Create encoder once for the entire stream lifetime
+        let mut encoder = create_encoder();
+
+        for msg in sample_rx {
+            match msg {
+                EncoderMessage::Encode(samples) => {
+                    let mp3_data = encode_samples(&mut encoder, &samples);
+                    if mp3_tx.send(mp3_data).is_err() {
+                        break; // Receiver dropped
+                    }
+                }
+                EncoderMessage::Reset => {
+                    // Create fresh encoder after skip to avoid artifacts from old audio
+                    encoder = create_encoder();
+                    debug!("Encoder reset");
+                }
+                EncoderMessage::Shutdown => {
+                    break;
+                }
+            }
+        }
+        info!("Encoder thread shutting down");
+    });
+
+    (sample_tx, mp3_rx)
+}
+
+fn create_encoder() -> mp3lame_encoder::Encoder {
+    let mut builder = Builder::new().expect("Failed to create MP3 encoder builder");
+    builder.set_num_channels(OUTPUT_CHANNELS as u8).expect("Failed to set channels");
+    builder.set_sample_rate(OUTPUT_SAMPLE_RATE).expect("Failed to set sample rate");
+    builder.set_brate(mp3lame_encoder::Birtate::Kbps192).expect("Failed to set bitrate");
+    builder.set_quality(mp3lame_encoder::Quality::Best).expect("Failed to set quality");
+    builder.build().expect("Failed to build encoder")
+}
+
+fn encode_samples(encoder: &mut mp3lame_encoder::Encoder, samples: &[f32]) -> Vec<u8> {
+    // Convert f32 samples to i16
+    let pcm: Vec<i16> = samples
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+        .collect();
+
+    // Allocate output buffer (generous size)
+    let mp3_buffer_size = (pcm.len() as f32 * 1.25) as usize + 7200;
+    let mut mp3_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); mp3_buffer_size];
+
+    // Encode - no flush, encoder maintains state for gapless output
+    let input = InterleavedPcm(&pcm);
+    let bytes_written = match encoder.encode(input, &mut mp3_buffer) {
+        Ok(size) => size,
+        Err(e) => {
+            error!("MP3 encoding failed: {:?}", e);
+            return Vec::new();
+        }
+    };
+
+    // Copy to safe Vec
+    let mut mp3_data = Vec::with_capacity(bytes_written);
+    unsafe {
+        mp3_data.extend_from_slice(
+            std::slice::from_raw_parts(mp3_buffer.as_ptr() as *const u8, bytes_written)
+        );
+    }
+
+    debug!("Encoded {} samples -> {} bytes MP3", samples.len(), mp3_data.len());
+    mp3_data
+}
 
 /// HLS segment duration in seconds
 pub const HLS_SEGMENT_DURATION: f32 = 2.0;
@@ -104,6 +189,8 @@ pub struct AudioBroadcaster {
     start_time: Arc<AtomicU64>,
     /// Signal to clear local buffers (set by skip, cleared by broadcast loop)
     clear_buffers: Arc<std::sync::atomic::AtomicBool>,
+    /// Channel to send messages to the encoder thread
+    encoder_tx: Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<EncoderMessage>>>>,
 }
 
 impl AudioBroadcaster {
@@ -126,6 +213,7 @@ impl AudioBroadcaster {
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             start_time: Arc::new(AtomicU64::new(0)),
             clear_buffers: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            encoder_tx: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -149,6 +237,13 @@ impl AudioBroadcaster {
         // Signal the broadcast loop to clear its local buffers
         self.clear_buffers.store(true, Ordering::SeqCst);
 
+        // Reset the encoder to avoid artifacts from previous track's encoder state
+        if let Ok(guard) = self.encoder_tx.lock() {
+            if let Some(tx) = guard.as_ref() {
+                let _ = tx.send(EncoderMessage::Reset);
+            }
+        }
+
         // Skip in the pipeline (clears pipeline's internal buffer)
         self.pipeline.skip().await?;
 
@@ -160,6 +255,25 @@ impl AudioBroadcaster {
             state.segments.clear();
             state.discontinuity = true;
             info!("Skip: cleared {} segments, set clear_buffers flag, marked discontinuity", old_count);
+        }
+
+        // Wait for at least one new segment to be ready before returning
+        // This ensures the client can start playing immediately after skip
+        let timeout = std::time::Duration::from_secs(10);
+        let start = std::time::Instant::now();
+        loop {
+            {
+                let state = self.state.read().await;
+                if !state.segments.is_empty() {
+                    info!("Skip complete: first segment ready after {:?}", start.elapsed());
+                    break;
+                }
+            }
+            if start.elapsed() > timeout {
+                warn!("Skip: timed out waiting for first segment");
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
 
         Ok(())
@@ -177,6 +291,15 @@ impl AudioBroadcaster {
             .as_millis() as u64;
         self.start_time.store(start, Ordering::Relaxed);
 
+        // Spawn the persistent encoder thread
+        let (encoder_tx, encoder_rx) = spawn_encoder_thread();
+
+        // Store encoder_tx for skip resets
+        {
+            let mut guard = self.encoder_tx.lock().unwrap();
+            *guard = Some(encoder_tx.clone());
+        }
+
         let pipeline = self.pipeline.clone();
         let state = self.state.clone();
         let viz_tx = self.viz_tx.clone();
@@ -190,11 +313,21 @@ impl AudioBroadcaster {
 
         // Spawn the encoding loop
         tokio::spawn(async move {
-            info!("Audio broadcaster started");
+            info!("Audio broadcaster started with persistent encoder");
 
-            // Samples needed per segment
-            let samples_per_segment = (config.segment_duration * OUTPUT_SAMPLE_RATE as f32) as usize
+            // Samples needed per segment - aligned to MP3 frame boundaries
+            // MP3 frames are 1152 samples per channel (2304 for stereo)
+            // Aligning prevents encoding artifacts at segment boundaries
+            const MP3_FRAME_SAMPLES: usize = 1152 * OUTPUT_CHANNELS; // 2304 for stereo
+            let raw_samples = (config.segment_duration * OUTPUT_SAMPLE_RATE as f32) as usize
                 * OUTPUT_CHANNELS;
+            // Round up to nearest MP3 frame boundary
+            let samples_per_segment = ((raw_samples + MP3_FRAME_SAMPLES - 1) / MP3_FRAME_SAMPLES)
+                * MP3_FRAME_SAMPLES;
+            // Calculate actual segment duration after alignment
+            let actual_segment_duration = samples_per_segment as f32 / (OUTPUT_SAMPLE_RATE as f32 * OUTPUT_CHANNELS as f32);
+            info!("Segment size: {} samples ({:.4}s, {} MP3 frames)",
+                  samples_per_segment, actual_segment_duration, samples_per_segment / MP3_FRAME_SAMPLES);
 
             // Buffer for accumulating samples
             let mut sample_buffer: Vec<f32> = Vec::with_capacity(samples_per_segment);
@@ -213,12 +346,12 @@ impl AudioBroadcaster {
 
             // Real-time throttling: track when we started and how many segments we've produced
             let broadcast_start = std::time::Instant::now();
-            let segment_duration_ms = (config.segment_duration * 1000.0) as u64;
+            let segment_duration_ms = (actual_segment_duration * 1000.0) as u64;
             // Allow producing up to 3 segments ahead of real-time for buffering
             let max_lead_segments: u64 = 3;
 
-            // Read loop
-            let mut read_buffer = vec![0.0f32; 4096];
+            // Read loop - larger buffer reduces read cycles and timing jitter
+            let mut read_buffer = vec![0.0f32; 8192];
 
             while running.load(Ordering::Relaxed) {
                 // Check if skip was requested - clear local buffers
@@ -330,15 +463,19 @@ impl AudioBroadcaster {
 
                     let segment_samples: Vec<f32> = sample_buffer.drain(..samples_per_segment).collect();
 
-                    // Encode to MP3 - each segment is independently decodable
-                    let mp3_data = tokio::task::spawn_blocking(move || {
-                        Self::encode_segment(&segment_samples)
-                    })
-                    .await
-                    .unwrap_or_else(|e| {
-                        error!("Encoding task panicked: {}", e);
-                        Vec::new()
-                    });
+                    // Encode to MP3 using persistent encoder thread (gapless)
+                    if encoder_tx.send(EncoderMessage::Encode(segment_samples)).is_err() {
+                        error!("Failed to send to encoder thread");
+                        break;
+                    }
+
+                    let mp3_data = match encoder_rx.recv() {
+                        Ok(data) => data,
+                        Err(_) => {
+                            error!("Encoder thread disconnected");
+                            break;
+                        }
+                    };
 
                     // Skip empty segments
                     if mp3_data.is_empty() {
@@ -352,7 +489,7 @@ impl AudioBroadcaster {
 
                     let segment = HlsSegment {
                         sequence,
-                        duration: config.segment_duration,
+                        duration: actual_segment_duration,
                         data: mp3_data,
                         track_id: st.current_track_id.clone(),
                     };
@@ -375,6 +512,8 @@ impl AudioBroadcaster {
                 }
             }
 
+            // Shutdown encoder thread
+            let _ = encoder_tx.send(EncoderMessage::Shutdown);
             info!("Audio broadcaster stopped");
         });
 
@@ -384,6 +523,12 @@ impl AudioBroadcaster {
     /// Stop the broadcaster
     pub fn stop(&self) {
         self.running.store(false, Ordering::Relaxed);
+        // Signal encoder thread to shutdown
+        if let Ok(guard) = self.encoder_tx.lock() {
+            if let Some(tx) = guard.as_ref() {
+                let _ = tx.send(EncoderMessage::Shutdown);
+            }
+        }
     }
 
     /// Generate the HLS playlist (m3u8)
@@ -449,96 +594,6 @@ impl AudioBroadcaster {
     /// Get the current stream URL for clients
     pub fn get_stream_url(&self, station_id: &str) -> String {
         format!("/api/v1/stations/{}/stream/playlist.m3u8", station_id)
-    }
-
-    /// Encode PCM samples to MP3 format - creates a complete, independently decodable MP3 segment
-    fn encode_segment(samples: &[f32]) -> Vec<u8> {
-        // Create a fresh encoder for each segment to ensure complete frames
-        let mut builder = match Builder::new() {
-            Some(b) => b,
-            None => {
-                error!("Failed to create MP3 encoder builder");
-                return Vec::new();
-            }
-        };
-
-        if let Err(e) = builder.set_num_channels(OUTPUT_CHANNELS as u8) {
-            error!("Failed to set channels: {:?}", e);
-            return Vec::new();
-        }
-        if let Err(e) = builder.set_sample_rate(OUTPUT_SAMPLE_RATE) {
-            error!("Failed to set sample rate: {:?}", e);
-            return Vec::new();
-        }
-        if let Err(e) = builder.set_brate(mp3lame_encoder::Birtate::Kbps192) {
-            error!("Failed to set bitrate: {:?}", e);
-            return Vec::new();
-        }
-        if let Err(e) = builder.set_quality(mp3lame_encoder::Quality::Best) {
-            error!("Failed to set quality: {:?}", e);
-            return Vec::new();
-        }
-
-        let mut encoder = match builder.build() {
-            Ok(enc) => enc,
-            Err(e) => {
-                error!("Failed to build encoder: {:?}", e);
-                return Vec::new();
-            }
-        };
-
-        // Convert f32 samples to i16
-        let pcm: Vec<i16> = samples
-            .iter()
-            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
-
-        // Allocate output buffer
-        let mp3_buffer_size = (pcm.len() as f32 * 1.25) as usize + 7200;
-        let mut mp3_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); mp3_buffer_size];
-
-        // Encode to MP3
-        let input = InterleavedPcm(&pcm);
-        let bytes_written = match encoder.encode(input, &mut mp3_buffer) {
-            Ok(size) => size,
-            Err(e) => {
-                error!("MP3 encoding failed: {:?}", e);
-                return Vec::new();
-            }
-        };
-
-        // Flush to complete the MP3 frames
-        let flush_buffer_size = 7200;
-        let mut flush_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); flush_buffer_size];
-        let flush_written = match encoder.flush::<FlushNoGap>(&mut flush_buffer) {
-            Ok(size) => size,
-            Err(e) => {
-                error!("MP3 flush failed: {:?}", e);
-                0
-            }
-        };
-
-        // Combine encoded data and flush data
-        let total_size = bytes_written + flush_written;
-        let mut mp3_data = Vec::with_capacity(total_size);
-        unsafe {
-            mp3_data.extend_from_slice(
-                std::slice::from_raw_parts(mp3_buffer.as_ptr() as *const u8, bytes_written)
-            );
-            if flush_written > 0 {
-                mp3_data.extend_from_slice(
-                    std::slice::from_raw_parts(flush_buffer.as_ptr() as *const u8, flush_written)
-                );
-            }
-        }
-
-        debug!(
-            "Encoded segment: {} samples -> {} bytes MP3",
-            samples.len(),
-            mp3_data.len()
-        );
-
-        mp3_data
     }
 
     /// Compute visualization data from samples

@@ -120,8 +120,12 @@
 		if (Hls.isSupported()) {
 			hls = new Hls({
 				enableWorker: true,
-				lowLatencyMode: true,
-				backBufferLength: 30,
+				lowLatencyMode: false,  // Not LL-HLS, standard 2s segments
+				backBufferLength: 10,   // Keep less back buffer for live
+				maxBufferLength: 30,    // Max forward buffer
+				liveSyncDuration: 4,    // Target 2 segments behind live edge
+				liveMaxLatencyDuration: 10,
+				liveDurationInfinity: true,  // Treat as live stream
 			});
 
 			hls.loadSource(streamUrl);
@@ -288,14 +292,11 @@
 				hls = null;
 			}
 
-			// Call skip API
+			// Call skip API - backend waits for first segment to be ready
 			await api.skipTrack(station.id);
 
 			// Update UI with new track info
 			await updateNowPlaying();
-
-			// Small delay to ensure server has new segments ready
-			await new Promise(resolve => setTimeout(resolve, 300));
 
 			// Re-initialize HLS and start playback
 			initHls();

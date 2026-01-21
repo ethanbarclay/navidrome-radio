@@ -360,7 +360,7 @@ impl AudioPipeline {
                 }
 
                 // Small sleep to prevent busy loop
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
             }
         });
 
