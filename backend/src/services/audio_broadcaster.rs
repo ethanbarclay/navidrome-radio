@@ -87,6 +87,15 @@ fn encode_samples(encoder: &mut mp3lame_encoder::Encoder, samples: &[f32]) -> Ve
         }
     };
 
+    // Defensive check: ensure encoder did not report writing beyond buffer
+    if bytes_written > mp3_buffer_size {
+        error!(
+            "MP3 encoder reported {} bytes written, exceeds buffer size {}",
+            bytes_written, mp3_buffer_size
+        );
+        return Vec::new();
+    }
+
     // Copy to safe Vec
     let mut mp3_data = Vec::with_capacity(bytes_written);
     unsafe {
@@ -296,7 +305,7 @@ impl AudioBroadcaster {
 
         // Store encoder_tx for skip resets
         {
-            let mut guard = self.encoder_tx.lock().unwrap();
+            let mut guard = self.encoder_tx.lock().expect("encoder_tx mutex poisoned");
             *guard = Some(encoder_tx.clone());
         }
 
