@@ -222,7 +222,7 @@
 	let isPaused = $state(false);
 	let embeddingError = $state<string | null>(null);
 	let embeddingProgress = $state<EmbeddingProgress | null>(null);
-	let embeddingEventSource: EventSource | null = null;
+	let embeddingAbortController: AbortController | null = null;
 	let syncProgress = $state<{
 		type: string;
 		message: string;
@@ -278,10 +278,10 @@
 		}
 	}
 
-	function handleStartEmbeddingIndex() {
-		if (embeddingEventSource) {
-			embeddingEventSource.close();
-			embeddingEventSource = null;
+	async function handleStartEmbeddingIndex() {
+		if (embeddingAbortController) {
+			embeddingAbortController.abort();
+			embeddingAbortController = null;
 		}
 
 		indexingEmbeddings = true;
@@ -296,42 +296,71 @@
 			return;
 		}
 
-		const url = new URL('/api/v1/embeddings/index-stream', window.location.origin);
-		url.searchParams.set('token', token);
+		embeddingAbortController = new AbortController();
 
-		embeddingEventSource = new EventSource(url.toString());
+		try {
+			const response = await fetch('/api/v1/embeddings/index-stream', {
+				headers: {
+					'Authorization': `Bearer ${token}`
+				},
+				signal: embeddingAbortController.signal
+			});
 
-		embeddingEventSource.onmessage = (event) => {
-			try {
-				const progress = JSON.parse(event.data);
-				embeddingProgress = progress;
-
-				if (progress.type === 'completed') {
-					indexingEmbeddings = false;
-					isPaused = false;
-					embeddingEventSource?.close();
-					embeddingEventSource = null;
-					loadEmbeddingStatus();
-				} else if (progress.type === 'error') {
-					indexingEmbeddings = false;
-					isPaused = false;
-					embeddingError = progress.message;
-					embeddingEventSource?.close();
-					embeddingEventSource = null;
-				}
-			} catch (e) {
-				console.error('Failed to parse SSE message:', e);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
 			}
-		};
 
-		embeddingEventSource.onerror = (error) => {
+			const reader = response.body?.getReader();
+			if (!reader) {
+				throw new Error('No response body');
+			}
+
+			const decoder = new TextDecoder();
+			let buffer = '';
+
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					if (line.startsWith('data: ')) {
+						try {
+							const progress = JSON.parse(line.slice(6));
+							embeddingProgress = progress;
+
+							if (progress.type === 'completed') {
+								indexingEmbeddings = false;
+								isPaused = false;
+								embeddingAbortController = null;
+								loadEmbeddingStatus();
+								return;
+							} else if (progress.type === 'error') {
+								indexingEmbeddings = false;
+								isPaused = false;
+								embeddingError = progress.message;
+								embeddingAbortController = null;
+								return;
+							}
+						} catch (e) {
+							console.error('Failed to parse SSE message:', e);
+						}
+					}
+				}
+			}
+		} catch (error) {
+			if (error instanceof Error && error.name === 'AbortError') {
+				return;
+			}
 			console.error('SSE connection error:', error);
 			indexingEmbeddings = false;
 			isPaused = false;
 			embeddingError = 'Connection to embedding stream failed';
-			embeddingEventSource?.close();
-			embeddingEventSource = null;
-		};
+			embeddingAbortController = null;
+		}
 	}
 
 	async function handlePauseEmbeddings() {
@@ -421,9 +450,9 @@
 				eventSource.close();
 				eventSource = null;
 			}
-			if (embeddingEventSource) {
-				embeddingEventSource.close();
-				embeddingEventSource = null;
+			if (embeddingAbortController) {
+				embeddingAbortController.abort();
+				embeddingAbortController = null;
 			}
 		};
 	});
