@@ -21,6 +21,7 @@
 	let sessionId = $state<string>('');
 	let heartbeatInterval: number;
 	let listenerCounts = $state<Record<string, number>>({});
+	let listenerCountsInterval: number;
 	let playbackAbortController: AbortController | null = null;
 
 
@@ -48,13 +49,14 @@
 
 		// Poll listener counts
 		updateListenerCounts();
-		setInterval(updateListenerCounts, 10000);
+		listenerCountsInterval = setInterval(updateListenerCounts, 10000);
 	});
 
 	onDestroy(() => {
 		if (pollInterval) clearInterval(pollInterval);
 		if (progressInterval) clearInterval(progressInterval);
 		if (heartbeatInterval) clearInterval(heartbeatInterval);
+		if (listenerCountsInterval) clearInterval(listenerCountsInterval);
 		stopPlayback();
 	});
 
