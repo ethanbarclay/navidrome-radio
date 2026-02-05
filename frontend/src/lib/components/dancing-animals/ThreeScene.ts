@@ -26,9 +26,15 @@ export class ThreeScene {
 
 	private isPlaying = false;
 
+	// Bound event handler (stored for proper cleanup)
+	private boundHandleResize: () => void;
+
 	constructor(container: HTMLElement) {
 		this.container = container;
 		this.clock = new THREE.Clock();
+
+		// Store bound handler for proper cleanup
+		this.boundHandleResize = this.handleResize.bind(this);
 
 		// Create renderer
 		this.renderer = new THREE.WebGLRenderer({
@@ -63,7 +69,7 @@ export class ThreeScene {
 
 		// Handle resize
 		this.handleResize();
-		window.addEventListener('resize', this.handleResize.bind(this));
+		window.addEventListener('resize', this.boundHandleResize);
 	}
 
 	/**
@@ -314,7 +320,7 @@ export class ThreeScene {
 	 */
 	dispose(): void {
 		this.stop();
-		window.removeEventListener('resize', this.handleResize.bind(this));
+		window.removeEventListener('resize', this.boundHandleResize);
 
 		this.disposeAnimals();
 
