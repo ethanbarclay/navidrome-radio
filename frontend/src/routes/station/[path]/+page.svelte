@@ -48,6 +48,9 @@
 	let sessionId = $state<string>('');
 	let heartbeatInterval: number;
 
+	// Audio event listener state (to avoid accumulating listeners)
+	let audioListenersAttached = false;
+
 	// Handle page unload
 	function handleBeforeUnload() {
 		if (station && sessionId && hasStartedPlaying) {
@@ -313,16 +316,19 @@
 
 		hasStartedPlaying = true;
 
-		// Add buffering event listeners to audio element
-		audioElement.addEventListener('waiting', () => {
-			isBuffering = true;
-		});
-		audioElement.addEventListener('playing', () => {
-			isBuffering = false;
-		});
-		audioElement.addEventListener('canplay', () => {
-			isBuffering = false;
-		});
+		// Add buffering event listeners only once to avoid accumulation
+		if (!audioListenersAttached) {
+			audioElement.addEventListener('waiting', () => {
+				isBuffering = true;
+			});
+			audioElement.addEventListener('playing', () => {
+				isBuffering = false;
+			});
+			audioElement.addEventListener('canplay', () => {
+				isBuffering = false;
+			});
+			audioListenersAttached = true;
+		}
 
 		// Initialize HLS stream
 		initHls();
