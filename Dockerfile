@@ -26,6 +26,8 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     g++ \
+    make \
+    file \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy backend manifests
