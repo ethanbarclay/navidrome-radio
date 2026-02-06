@@ -389,7 +389,8 @@
 					<span class="line"></span>
 					<span class="corner">┐</span>
 				</div>
-				<div class="section-body">
+				<!-- Desktop: vertical list -->
+				<div class="section-body desktop-only">
 					<button class="tune-arrow tune-up" onclick={tuneUp} disabled={selectedIndex === 0}>
 						<span>▲</span>
 					</button>
@@ -411,10 +412,27 @@
 						<span>▼</span>
 					</button>
 				</div>
+				<!-- Mobile: horizontal carousel with centered active station -->
+				<div class="section-body mobile-only mobile-station-carousel">
+					<button class="carousel-arrow" onclick={tuneUp} disabled={selectedIndex === 0}>
+						<span>◄</span>
+					</button>
+					<div class="carousel-station">
+						{#if selectedStation}
+							<span class="carousel-freq">{(88.1 + selectedIndex * 0.2).toFixed(1)}</span>
+							<span class="carousel-name">{selectedStation.name}</span>
+							<span class="carousel-listeners">[{listenerCounts[selectedStation.id] || 0}]</span>
+						{/if}
+					</div>
+					<button class="carousel-arrow" onclick={tuneDown} disabled={selectedIndex === stations.length - 1}>
+						<span>►</span>
+					</button>
+				</div>
 				<div class="section-footer">
 					<span class="corner">└</span>
 					<span class="line"></span>
-					<span class="title">↑/↓ to tune</span>
+					<span class="title desktop-only">↑/↓ to tune</span>
+					<span class="title mobile-only">◄/► to tune</span>
 					<span class="line"></span>
 					<span class="corner">┘</span>
 				</div>
@@ -731,8 +749,22 @@
 	}
 
 	@media (max-width: 1000px) {
+		.tuner-container {
+			padding: 0.5rem 0.75rem;
+		}
+
+		.header {
+			padding-bottom: 0.25rem;
+			margin-bottom: 0.5rem;
+		}
+
+		.header .title {
+			font-size: 1.25rem;
+			letter-spacing: 0.15em;
+		}
+
 		.desktop-only {
-			display: none;
+			display: none !important;
 		}
 
 		.mobile-only {
@@ -742,22 +774,33 @@
 
 		.main-content {
 			grid-template-columns: 1fr;
-			grid-template-rows: 1fr auto;
+			grid-template-rows: auto 1fr;
+			gap: 0.5rem;
 		}
 
 		.mobile-hidden {
 			display: none !important;
 		}
 
-		/* Station details on mobile - fill space with visualizer */
+		/* Station selector carousel on mobile */
+		.station-selector .mobile-station-carousel {
+			display: flex;
+		}
+
+		/* Station details/visualizer on mobile */
 		.station-details {
 			flex: 1;
-			min-height: 300px;
+			min-height: 150px;
+		}
+
+		.station-details .details-content {
+			padding: 0.5rem;
+			gap: 0.5rem;
 		}
 
 		.station-details .viz-container {
 			flex: 1;
-			min-height: 200px;
+			min-height: 120px;
 			height: 100%;
 		}
 
@@ -765,6 +808,48 @@
 		.station-details .station-image,
 		.station-details .station-info {
 			display: none;
+		}
+
+		/* Now playing on mobile */
+		.now-playing .np-content {
+			padding: 0.5rem;
+			gap: 0.4rem;
+		}
+
+		.album-art img {
+			max-width: 200px;
+			margin: 0 auto;
+			display: block;
+		}
+
+		.track-info .title {
+			font-size: 0.85rem;
+		}
+
+		.track-info .artist {
+			font-size: 0.75rem;
+		}
+
+		.track-info .album {
+			font-size: 0.7rem;
+		}
+
+		/* Controls */
+		.controls {
+			margin-top: 0.25rem;
+		}
+
+		.control-bar {
+			padding: 0.3rem 0;
+		}
+
+		.ctrl-btn {
+			font-size: 0.75rem;
+			padding: 0.15rem 0.5rem;
+		}
+
+		.help {
+			font-size: 0.6rem;
 		}
 	}
 
@@ -818,6 +903,72 @@
 		overflow: hidden;
 	}
 
+	/* Mobile carousel - hidden on desktop */
+	.mobile-station-carousel {
+		display: none;
+		flex-direction: row;
+		align-items: center;
+		justify-content: center;
+		padding: 0.5rem;
+		gap: 0.5rem;
+	}
+
+	.carousel-arrow {
+		background: transparent;
+		border: 1px solid #333;
+		color: #00ff88;
+		font-family: inherit;
+		font-size: 1.2rem;
+		padding: 0.5rem 0.75rem;
+		cursor: pointer;
+		transition: all 0.15s;
+		flex-shrink: 0;
+	}
+
+	.carousel-arrow:hover:not(:disabled) {
+		background: #1a2a1a;
+		border-color: #00ff88;
+	}
+
+	.carousel-arrow:disabled {
+		color: #333;
+		border-color: #222;
+		cursor: not-allowed;
+	}
+
+	.carousel-station {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		text-align: center;
+		padding: 0.5rem;
+		background: linear-gradient(180deg, #0a1a0a 0%, #1a2a1a 50%, #0a1a0a 100%);
+		border: 1px solid #00ff88;
+		min-width: 0;
+	}
+
+	.carousel-freq {
+		color: #ff8800;
+		font-size: 1.1rem;
+		font-weight: bold;
+	}
+
+	.carousel-name {
+		color: #00ff88;
+		font-size: 0.9rem;
+		font-weight: bold;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100%;
+	}
+
+	.carousel-listeners {
+		color: #666;
+		font-size: 0.7rem;
+	}
 
 	.tune-arrow {
 		display: flex;
