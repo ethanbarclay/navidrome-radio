@@ -161,6 +161,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1",
             Router::new()
                 .nest("/auth", api::auth_routes())
+                .nest("/settings", api::settings_routes())
                 .merge(api::station_routes())
                 .merge(api::library_routes())
                 .nest("/navidrome", api::streaming_routes().with_state(navidrome_client.clone()))

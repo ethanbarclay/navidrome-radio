@@ -158,7 +158,12 @@
 	});
 
 	// Tab state
-	let activeTab = $state<'library' | 'stations' | 'create'>('stations');
+	let activeTab = $state<'library' | 'stations' | 'create' | 'settings'>('stations');
+
+	// Settings state
+	let siteTitle = $state('NAVIDROME RADIO');
+	let savingSettings = $state(false);
+	let settingsMessage = $state<string | null>(null);
 
 	let stations = $state<Station[]>([]);
 	let loading = $state(true);
@@ -242,7 +247,7 @@
 			return;
 		}
 
-		Promise.all([loadStations(), loadAiCapabilities(), loadLibraryStats(), loadListenerCounts(), loadEmbeddingStatus()]);
+		Promise.all([loadStations(), loadAiCapabilities(), loadLibraryStats(), loadListenerCounts(), loadEmbeddingStatus(), loadSettings()]);
 
 		listenerCountInterval = setInterval(loadListenerCounts, 5000);
 
@@ -275,6 +280,29 @@
 			embeddingStatus = await api.getEmbeddingStatus();
 		} catch (e) {
 			console.error('Failed to load embedding status:', e);
+		}
+	}
+
+	async function loadSettings() {
+		try {
+			const settings = await api.getSettings();
+			siteTitle = settings.site_title;
+		} catch (e) {
+			console.error('Failed to load settings:', e);
+		}
+	}
+
+	async function saveSettings() {
+		savingSettings = true;
+		settingsMessage = null;
+		try {
+			await api.updateSettings({ site_title: siteTitle });
+			settingsMessage = 'Settings saved!';
+			setTimeout(() => settingsMessage = null, 3000);
+		} catch (e) {
+			settingsMessage = e instanceof Error ? e.message : 'Failed to save settings';
+		} finally {
+			savingSettings = false;
 		}
 	}
 
@@ -723,6 +751,9 @@
 		<button class="tab" class:active={activeTab === 'create'} onclick={() => activeTab = 'create'}>
 			[3] CREATE
 		</button>
+		<button class="tab" class:active={activeTab === 'settings'} onclick={() => activeTab = 'settings'}>
+			[4] SETTINGS
+		</button>
 		{#if aiAvailable}
 			<span class="ai-badge">● AI</span>
 		{/if}
@@ -1019,13 +1050,51 @@
 					<span>└─────────────────────────────────────────────────────────────────────────────────┘</span>
 				</div>
 			</div>
+		{:else if activeTab === 'settings'}
+			<!-- Settings Tab -->
+			<div class="panel">
+				<div class="panel-header">
+					<span>┌─ SETTINGS ───────────────────────────────────────────────────────────────────┐</span>
+				</div>
+				<div class="panel-content settings-content">
+					<label class="form-row">
+						<span class="form-label">SITE TITLE:</span>
+						<input
+							type="text"
+							bind:value={siteTitle}
+							class="form-input"
+							placeholder="NAVIDROME RADIO"
+						/>
+					</label>
+					<p class="form-hint">This title appears in the header on the homepage.</p>
+
+					<div class="form-row">
+						<button
+							class="tui-btn submit"
+							onclick={saveSettings}
+							disabled={savingSettings}
+						>
+							{savingSettings ? '[SAVING...]' : '[SAVE SETTINGS]'}
+						</button>
+					</div>
+
+					{#if settingsMessage}
+						<div class="settings-message" class:success={settingsMessage === 'Settings saved!'}>
+							{settingsMessage}
+						</div>
+					{/if}
+				</div>
+				<div class="panel-footer">
+					<span>└─────────────────────────────────────────────────────────────────────────────────┘</span>
+				</div>
+			</div>
 		{/if}
 	</main>
 
 	<!-- Footer -->
 	<footer class="footer">
 		<span class="footer-border">├─</span>
-		<span class="help">1:stations  2:library  3:create</span>
+		<span class="help">1:stations  2:library  3:create  4:settings</span>
 		<span class="footer-border-end">─┤</span>
 	</footer>
 </div>
@@ -1790,5 +1859,34 @@
 		font-size: 0.6rem;
 		color: #444;
 		padding-top: 0.5rem;
+	}
+
+	/* Settings Tab */
+	.settings-content {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		max-width: 500px;
+	}
+
+	.form-hint {
+		font-size: 0.7rem;
+		color: #555;
+		margin: 0;
+		padding-left: calc(60px + 0.75rem);
+	}
+
+	.settings-message {
+		font-size: 0.75rem;
+		padding: 0.5rem;
+		background: #2a0a0a;
+		border: 1px solid #ff4444;
+		color: #ff8888;
+	}
+
+	.settings-message.success {
+		background: #0a2a0a;
+		border-color: #00ff88;
+		color: #00ff88;
 	}
 </style>

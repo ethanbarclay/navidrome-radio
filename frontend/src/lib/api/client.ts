@@ -532,5 +532,22 @@ export const api = {
 	async getEmbeddingsForVisualization(limit?: number): Promise<EmbeddingVisualizationResponse> {
 		const params = limit ? `?limit=${limit}` : '';
 		return request(`/embeddings/visualization${params}`);
+	},
+
+	// Settings
+	async getSettings(): Promise<AppSettings> {
+		return request('/settings');
+	},
+
+	async updateSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+		return request('/settings', {
+			method: 'PUT',
+			body: JSON.stringify(settings)
+		});
 	}
 };
+
+// Settings types
+export interface AppSettings {
+	site_title: string;
+}

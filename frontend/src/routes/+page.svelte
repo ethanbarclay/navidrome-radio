@@ -24,6 +24,7 @@
 	let listenerCountsInterval: number;
 	let playbackAbortController: AbortController | null = null;
 	let mobileView = $state<'stations' | 'visualizer'>('stations');
+	let siteTitle = $state('NAVIDROME RADIO');
 
 	let selectedStation = $derived(stations[selectedIndex] || null);
 
@@ -39,6 +40,14 @@
 
 	onMount(async () => {
 		sessionId = crypto.randomUUID();
+
+		// Load site title
+		try {
+			const settings = await api.getSettings();
+			siteTitle = settings.site_title;
+		} catch (e) {
+			console.error('Failed to load settings:', e);
+		}
 
 		try {
 			stations = await api.getStations();
@@ -343,7 +352,7 @@
 		<header class="header">
 			<div class="header-content">
 				<span class="header-left">┌──</span>
-				<h1 class="title">NAVIDROME RADIO</h1>
+				<h1 class="title">{siteTitle}</h1>
 				<span class="header-right">──┐</span>
 			</div>
 			<div class="header-sub">
