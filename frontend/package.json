@@ -17,6 +17,7 @@
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
     "@types/three": "^0.182.0",
     "autoprefixer": "^10.4.16",
+    "baseline-browser-mapping": "^2.9.19",
     "jsonwebtoken": "^9.0.2",
     "postcss": "^8.4.32",
     "svelte": "^5.0.0",

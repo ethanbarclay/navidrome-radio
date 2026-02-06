@@ -942,18 +942,18 @@
 					{/if}
 
 					<form onsubmit={handleCreateStation}>
-						<div class="form-row">
-							<label class="form-label">NAME:</label>
+						<label class="form-row">
+							<span class="form-label">NAME:</span>
 							<input type="text" bind:value={name} required class="form-input" placeholder="My Station" />
-						</div>
-						<div class="form-row">
-							<label class="form-label">PATH:</label>
+						</label>
+						<label class="form-row">
+							<span class="form-label">PATH:</span>
 							<input type="text" bind:value={path} required pattern="[a-z0-9-]+" class="form-input" placeholder="my-station" />
-						</div>
-						<div class="form-row">
-							<label class="form-label">DESC:</label>
+						</label>
+						<label class="form-row">
+							<span class="form-label">DESC:</span>
 							<textarea bind:value={description} required rows="2" class="form-input form-textarea" placeholder="Describe the vibe..."></textarea>
-						</div>
+						</label>
 
 						{#if aiAvailable && description.trim()}
 							<div class="form-row">
@@ -1003,10 +1003,10 @@
 							</div>
 						{/if}
 
-						<div class="form-row">
-							<label class="form-label">GENRES:</label>
+						<label class="form-row">
+							<span class="form-label">GENRES:</span>
 							<input type="text" bind:value={genresInput} required class="form-input" placeholder="Rock, Electronic, Jazz" />
-						</div>
+						</label>
 
 						<div class="form-row">
 							<button type="submit" disabled={creating} class="tui-btn submit">

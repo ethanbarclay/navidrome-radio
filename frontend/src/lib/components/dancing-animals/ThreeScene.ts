@@ -111,20 +111,22 @@ export class ThreeScene {
 
 		this.camera.aspect = width / height;
 
-		// Adjust camera for portrait/narrow views (mobile)
-		// Move camera back to fit all animals when aspect ratio is narrow
-		if (this.camera.aspect < 1.0) {
-			// Portrait: move camera way back
-			this.baseCameraZ = 28;
+		// Adjust camera based on screen width (mobile detection)
+		const isMobile = window.innerWidth < 768;
+		const isTablet = window.innerWidth < 1000;
+
+		if (isMobile) {
+			// Mobile: move camera back
+			this.baseCameraZ = 10;
 			this.camera.position.set(0, 1.5, this.baseCameraZ);
 			this.camera.lookAt(0, 0, 0);
-		} else if (this.camera.aspect < 1.4) {
-			// Near-square: move camera back moderately
-			this.baseCameraZ = 16;
+		} else if (isTablet) {
+			// Tablet: move camera back moderately
+			this.baseCameraZ = 14;
 			this.camera.position.set(0, 2, this.baseCameraZ);
 			this.camera.lookAt(0, 0.5, 0);
 		} else {
-			// Landscape: normal position
+			// Desktop: normal position
 			this.baseCameraZ = 8;
 			this.camera.position.set(0, 1.5, this.baseCameraZ);
 			this.camera.lookAt(0, 0.5, 0);
