@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::{AppError, Result};
-use crate::models::{AuthResponse, CreateUserRequest, LoginRequest, User, UserInfo, UserRole};
+use crate::models::{AuthResponse, CreateUserRequest, LoginRequest, User, UserRole};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,

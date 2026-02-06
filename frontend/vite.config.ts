@@ -10,5 +10,13 @@ export default defineConfig({
 				changeOrigin: true
 			}
 		}
+	},
+	// Required for Three.js SSR compatibility
+	ssr: {
+		noExternal: ['three']
+	},
+	// Optimize Three.js imports
+	optimizeDeps: {
+		include: ['three']
 	}
 });

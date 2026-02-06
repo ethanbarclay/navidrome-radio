@@ -23,59 +23,193 @@
 	}
 </script>
 
-<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4">
-	<div class="max-w-md w-full">
-		<div class="bg-gray-800 rounded-lg shadow-xl p-8">
-			<h2 class="text-3xl font-bold text-center mb-8">Login</h2>
-
+<div class="login-container">
+	<div class="login-box">
+		<div class="login-header">
+			<span>┌─ LOGIN ─────────────────────┐</span>
+		</div>
+		<div class="login-content">
 			{#if error}
-				<div class="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded mb-6">
-					{error}
+				<div class="error-msg">
+					<span>! {error}</span>
 				</div>
 			{/if}
 
 			<form onsubmit={handleLogin}>
-				<div class="mb-6">
-					<label for="username" class="block text-sm font-medium text-gray-300 mb-2">
-						Username
-					</label>
+				<div class="field">
+					<label for="username">USERNAME:</label>
 					<input
 						type="text"
 						id="username"
 						bind:value={username}
 						required
-						class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
-						placeholder="Enter your username"
+						placeholder="enter username"
 					/>
 				</div>
 
-				<div class="mb-6">
-					<label for="password" class="block text-sm font-medium text-gray-300 mb-2">
-						Password
-					</label>
+				<div class="field">
+					<label for="password">PASSWORD:</label>
 					<input
 						type="password"
 						id="password"
 						bind:value={password}
 						required
-						class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
-						placeholder="Enter your password"
+						placeholder="enter password"
 					/>
 				</div>
 
-				<button
-					type="submit"
-					disabled={loading}
-					class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-lg transition-colors"
-				>
-					{loading ? 'Logging in...' : 'Login'}
+				<button type="submit" disabled={loading} class="submit-btn">
+					[{loading ? 'LOGGING IN...' : 'LOGIN'}]
 				</button>
 			</form>
 
-			<p class="mt-6 text-center text-gray-400 text-sm">
-				Don't have an account?
-				<a href="/register" class="text-blue-400 hover:text-blue-300">Register</a>
-			</p>
+			<div class="register-link">
+				<span class="muted">No account?</span>
+				<a href="/register">[REGISTER]</a>
+			</div>
+
+			<div class="back-link">
+				<a href="/">[BACK TO RADIO]</a>
+			</div>
+		</div>
+		<div class="login-footer">
+			<span>└─────────────────────────────┘</span>
 		</div>
 	</div>
 </div>
+
+<style>
+	:global(html), :global(body) {
+		margin: 0;
+		padding: 0;
+		height: 100%;
+		background: #0a0a0a;
+		color: #e0e0e0;
+		font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+	}
+
+	.login-container {
+		min-height: 100vh;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1rem;
+	}
+
+	.login-box {
+		width: 100%;
+		max-width: 350px;
+	}
+
+	.login-header, .login-footer {
+		color: #444;
+		font-size: 0.8rem;
+	}
+
+	.login-content {
+		border-left: 1px solid #333;
+		border-right: 1px solid #333;
+		padding: 1.5rem;
+	}
+
+	.error-msg {
+		color: #ff6b6b;
+		font-size: 0.8rem;
+		margin-bottom: 1rem;
+		padding: 0.5rem;
+		border: 1px solid #ff6b6b33;
+		background: #ff6b6b11;
+	}
+
+	.field {
+		margin-bottom: 1.25rem;
+	}
+
+	.field label {
+		display: block;
+		color: #666;
+		font-size: 0.75rem;
+		margin-bottom: 0.4rem;
+		letter-spacing: 0.1em;
+	}
+
+	.field input {
+		width: 100%;
+		padding: 0.6rem 0.75rem;
+		background: #111;
+		border: 1px solid #333;
+		color: #e0e0e0;
+		font-family: inherit;
+		font-size: 0.85rem;
+		outline: none;
+		transition: border-color 0.15s;
+		box-sizing: border-box;
+	}
+
+	.field input:focus {
+		border-color: #00ff88;
+	}
+
+	.field input::placeholder {
+		color: #444;
+	}
+
+	.submit-btn {
+		width: 100%;
+		padding: 0.7rem;
+		background: transparent;
+		border: 1px solid #00ff88;
+		color: #00ff88;
+		font-family: inherit;
+		font-size: 0.85rem;
+		cursor: pointer;
+		transition: all 0.15s;
+		margin-top: 0.5rem;
+	}
+
+	.submit-btn:hover:not(:disabled) {
+		background: #00ff8822;
+	}
+
+	.submit-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.register-link {
+		margin-top: 1.5rem;
+		text-align: center;
+		font-size: 0.8rem;
+	}
+
+	.register-link .muted {
+		color: #555;
+	}
+
+	.register-link a {
+		color: #888;
+		text-decoration: none;
+		margin-left: 0.5rem;
+		transition: color 0.15s;
+	}
+
+	.register-link a:hover {
+		color: #00ff88;
+	}
+
+	.back-link {
+		margin-top: 1rem;
+		text-align: center;
+		font-size: 0.75rem;
+	}
+
+	.back-link a {
+		color: #555;
+		text-decoration: none;
+		transition: color 0.15s;
+	}
+
+	.back-link a:hover {
+		color: #888;
+	}
+</style>

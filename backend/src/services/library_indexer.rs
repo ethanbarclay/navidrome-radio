@@ -1,9 +1,10 @@
+#![allow(dead_code)]
+
 use crate::error::{AppError, Result};
 use crate::models::{
     LibraryTrack, LibrarySyncStatus, TrackAnalysisRequest, TrackAnalysisResult,
 };
 use crate::services::navidrome::NavidromeClient;
-use chrono::Utc;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::Semaphore;

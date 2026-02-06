@@ -15,15 +15,17 @@ use crate::services::{
 };
 use std::path::PathBuf;
 use axum::{
-    http::{header, Method},
+    http::{header, HeaderValue, Method, StatusCode},
+    response::IntoResponse,
     routing::get,
-    Router,
+    Json, Router,
 };
+use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tower_http::{
     compression::CompressionLayer,
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -138,6 +140,7 @@ async fn main() -> anyhow::Result<()> {
         embedding_control: Arc::new(tokio::sync::RwLock::new(
             crate::api::stations::EmbeddingControlState::default(),
         )),
+        station_broadcasters: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     });
 
     // Load active stations on startup
@@ -145,13 +148,20 @@ async fn main() -> anyhow::Result<()> {
         tracing::error!("Failed to load active stations: {:?}", e);
     }
 
+    // Build CORS layer from configuration
+    let cors = build_cors_layer(&config);
+    tracing::info!("CORS configured for origins: {:?}", config.cors_origins);
+
     // Build router
     let app = Router::new()
+        // Health check endpoint (outside /api/v1 for standard monitoring)
+        .route("/health", get(health_check))
         // API routes
         .nest(
             "/api/v1",
             Router::new()
                 .nest("/auth", api::auth_routes())
+                .nest("/settings", api::settings_routes())
                 .merge(api::station_routes())
                 .merge(api::library_routes())
                 .nest("/navidrome", api::streaming_routes().with_state(navidrome_client.clone()))
@@ -161,12 +171,7 @@ async fn main() -> anyhow::Result<()> {
         .fallback(get(frontend::serve_frontend))
         // Middleware
         .layer(CompressionLayer::new())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
-        );
+        .layer(cors);
 
     // Start server
     let addr = format!("{}:{}", config.server_host, config.server_port);
@@ -287,4 +292,44 @@ fn create_audio_encoder(path: PathBuf, db: &sqlx::PgPool) -> Option<Arc<AudioEnc
             None
         }
     }
+}
+
+/// Build CORS layer from configuration
+fn build_cors_layer(config: &Config) -> CorsLayer {
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
+    // Check if wildcard is configured (development mode)
+    if config.cors_origins.iter().any(|o| o == "*") {
+        tracing::warn!("CORS configured with wildcard origin (*) - this is insecure for production!");
+        cors.allow_origin(tower_http::cors::Any)
+    } else {
+        // Parse origins into HeaderValues
+        let origins: Vec<HeaderValue> = config
+            .cors_origins
+            .iter()
+            .filter_map(|origin| {
+                origin.parse::<HeaderValue>().ok().or_else(|| {
+                    tracing::warn!("Invalid CORS origin ignored: {}", origin);
+                    None
+                })
+            })
+            .collect();
+
+        if origins.is_empty() {
+            tracing::warn!("No valid CORS origins configured, defaulting to localhost");
+            cors.allow_origin("http://localhost:8000".parse::<HeaderValue>().unwrap())
+        } else {
+            cors.allow_origin(origins)
+        }
+    }
+}
+
+/// Health check endpoint for orchestration systems (Kubernetes, Docker, etc.)
+async fn health_check() -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({
+        "status": "healthy",
+        "service": "navidrome-radio"
+    })))
 }

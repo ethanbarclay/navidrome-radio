@@ -2,7 +2,6 @@ use crate::config::Config;
 use crate::error::{AppError, Result};
 use crate::models::{SelectionMode, Station, Track};
 use crate::services::navidrome::NavidromeClient;
-use anyhow::anyhow;
 use rand::{seq::SliceRandom, Rng};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

@@ -3,6 +3,8 @@
 	import { page } from '$app/stores';
 	import { api } from '$lib/api/client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import DancingAnimals from '$lib/components/DancingAnimals.svelte';
+	import Hls from 'hls.js';
 	import type { NowPlaying, Station } from '$lib/types';
 
 	// Prevent scrolling on mount
@@ -26,24 +28,30 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let audioElement = $state<HTMLAudioElement | undefined>();
-	// Check if user has a saved preference
-	const hasSavedPreference =
-		typeof localStorage !== 'undefined' && localStorage.getItem('radio_muted') !== null;
 	let isMuted = $state(
 		typeof localStorage !== 'undefined' ? localStorage.getItem('radio_muted') === 'true' : false
 	);
 	let pollInterval: number;
-	let currentTrackId = $state<string | null>(null);
 	let currentPosition = $state(0);
 	let progressInterval: number;
 	let hasStartedPlaying = $state(false);
 	let mediaSession: MediaSession | null = null;
 
+	// HLS state
+	let hls: Hls | null = null;
+	let hlsError = $state<string | null>(null);
+	let isBuffering = $state(false);
+
+	// 3D visualizer is always shown when playing (no toggle needed)
+
 	// Listener tracking
 	let sessionId = $state<string>('');
 	let heartbeatInterval: number;
 
-	// Handle page unload (tab close, navigation away)
+	// Audio event listener state (to avoid accumulating listeners)
+	let audioListenersAttached = false;
+
+	// Handle page unload
 	function handleBeforeUnload() {
 		if (station && sessionId && hasStartedPlaying) {
 			const data = JSON.stringify({ session_id: sessionId });
@@ -52,19 +60,15 @@
 	}
 
 	onMount(async () => {
-		// Generate a unique session ID for listener tracking
 		sessionId = crypto.randomUUID();
-
-		// Listen for page unload to notify backend
 		window.addEventListener('beforeunload', handleBeforeUnload);
 
-		// Initialize Media Session API for Android notification center
 		if ('mediaSession' in navigator) {
 			mediaSession = navigator.mediaSession;
 			setupMediaSession();
 		}
+
 		try {
-			// Find station by path
 			const stations = await api.getStations();
 			station = stations.find((s) => s.path === stationPath) || null;
 
@@ -80,38 +84,14 @@
 				return;
 			}
 
-			// Get now playing
+			// Get initial now playing info
 			await updateNowPlaying();
 
-			// Poll for updates every 3 seconds
+			// Poll for track info updates
 			pollInterval = setInterval(updateNowPlaying, 3000);
 
-			// Update progress bar every 500ms
+			// Update progress based on now playing
 			progressInterval = setInterval(updateProgress, 500);
-
-			// Set up audio element event listeners for Media Session API
-			const setupAudioListeners = () => {
-				if (!audioElement) {
-					setTimeout(setupAudioListeners, 100);
-					return;
-				}
-
-				// Update media session playback state on play/pause
-				audioElement.addEventListener('play', () => {
-					if (mediaSession) {
-						mediaSession.playbackState = 'playing';
-						}
-				});
-
-				audioElement.addEventListener('pause', () => {
-					if (mediaSession) {
-						mediaSession.playbackState = 'paused';
-						}
-				});
-
-				};
-
-			setupAudioListeners();
 
 			loading = false;
 		} catch (e) {
@@ -121,47 +101,92 @@
 	});
 
 	onDestroy(() => {
-		if (pollInterval) {
-			clearInterval(pollInterval);
+		if (pollInterval) clearInterval(pollInterval);
+		if (progressInterval) clearInterval(progressInterval);
+		if (heartbeatInterval) clearInterval(heartbeatInterval);
+		if (hls) {
+			hls.destroy();
+			hls = null;
 		}
-		if (progressInterval) {
-			clearInterval(progressInterval);
-		}
-		if (heartbeatInterval) {
-			clearInterval(heartbeatInterval);
-		}
-		// Remove beforeunload listener
 		window.removeEventListener('beforeunload', handleBeforeUnload);
-		// Notify backend that listener is leaving (for SPA navigation)
 		if (station && sessionId && hasStartedPlaying) {
-			// Use sendBeacon for reliable delivery
 			const data = JSON.stringify({ session_id: sessionId });
 			navigator.sendBeacon(`/api/v1/stations/${station.id}/listener/leave`, data);
 		}
 	});
+
+	function initHls() {
+		if (!audioElement || !station) return;
+
+		const streamUrl = `/api/v1/stations/${station.id}/stream/playlist.m3u8`;
+
+		if (Hls.isSupported()) {
+			hls = new Hls({
+				enableWorker: true,
+				lowLatencyMode: true,
+				liveSyncDurationCount: 2,
+				liveMaxLatencyDurationCount: 4,
+				liveDurationInfinity: true,
+				backBufferLength: 0,
+				maxBufferLength: 6,
+				maxMaxBufferLength: 10,
+			});
+
+			hls.loadSource(streamUrl);
+			hls.attachMedia(audioElement);
+
+			hls.on(Hls.Events.MANIFEST_PARSED, () => {
+				console.log('HLS manifest loaded');
+				if (hasStartedPlaying) {
+					audioElement?.play();
+				}
+			});
+
+			hls.on(Hls.Events.ERROR, (event, data) => {
+				console.error('HLS error:', data);
+				if (data.fatal) {
+					switch (data.type) {
+						case Hls.ErrorTypes.NETWORK_ERROR:
+							hlsError = 'Network error - retrying...';
+							hls?.startLoad();
+							break;
+						case Hls.ErrorTypes.MEDIA_ERROR:
+							hlsError = 'Media error - recovering...';
+							hls?.recoverMediaError();
+							break;
+						default:
+							hlsError = 'Stream error - please refresh';
+							hls?.destroy();
+							break;
+					}
+				}
+			});
+
+			hls.on(Hls.Events.FRAG_BUFFERED, () => {
+				isBuffering = false;
+				hlsError = null;
+			});
+
+		} else if (audioElement.canPlayType('application/vnd.apple.mpegurl')) {
+			// Native HLS support (Safari)
+			audioElement.src = streamUrl;
+			audioElement.addEventListener('loadedmetadata', () => {
+				if (hasStartedPlaying) {
+					audioElement?.play();
+				}
+			});
+		} else {
+			hlsError = 'HLS is not supported in this browser';
+		}
+	}
 
 	async function updateNowPlaying() {
 		if (!station) return;
 
 		try {
 			const np = await api.getNowPlaying(station.id);
-
-			// If track changed, sync to correct position
-			if (np.track.id !== currentTrackId) {
-				currentTrackId = np.track.id;
-				nowPlaying = np;
-
-				// Update media session metadata for new track
-				updateMediaSession();
-
-				// Wait a tick for the DOM to update with new audio element
-				await new Promise(resolve => setTimeout(resolve, 100));
-
-				// Wait for audio element to be ready, then sync
-				syncAudioPosition(np);
-			} else {
-				nowPlaying = np;
-			}
+			nowPlaying = np;
+			updateMediaSession();
 		} catch (e) {
 			console.error('Failed to update now playing:', e);
 		}
@@ -170,29 +195,21 @@
 	function setupMediaSession() {
 		if (!mediaSession) return;
 
-		// Set up media controls for notification center
 		mediaSession.setActionHandler('play', () => {
-			if (audioElement) {
-				audioElement.play();
-			}
+			audioElement?.play();
 		});
 
 		mediaSession.setActionHandler('pause', () => {
-			if (audioElement) {
-				audioElement.pause();
-			}
+			audioElement?.pause();
 		});
 
-		// Disable seek controls - this is a live radio stream
+		// Disable seeking for live stream
 		mediaSession.setActionHandler('seekbackward', null);
 		mediaSession.setActionHandler('seekforward', null);
 		mediaSession.setActionHandler('seekto', null);
-
-		// Disable previous/next (could be added later for station history)
 		mediaSession.setActionHandler('previoustrack', null);
 		mediaSession.setActionHandler('nexttrack', null);
 
-		// Clear position state to hide scrubber - makes it look like a livestream
 		if ('setPositionState' in mediaSession) {
 			mediaSession.setPositionState();
 		}
@@ -208,12 +225,8 @@
 			: `${window.location.origin}/api/v1/navidrome/cover/${nowPlaying.track.id}`;
 
 		try {
-			// Fetch the image and create a blob URL for better compatibility
 			const response = await fetch(coverUrl);
-
-			if (!response.ok) {
-				throw new Error('Failed to fetch cover');
-			}
+			if (!response.ok) throw new Error('Failed to fetch cover');
 
 			const blob = await response.blob();
 			const blobUrl = URL.createObjectURL(blob);
@@ -232,69 +245,18 @@
 				]
 			});
 		} catch {
-			// Fallback to direct URL if blob fetch fails
 			mediaSession.metadata = new MediaMetadata({
 				title: nowPlaying.track.title,
 				artist: nowPlaying.track.artist,
 				album: nowPlaying.track.album || station?.name || 'Navidrome Radio',
-				artwork: [
-					{ src: coverUrl, sizes: '512x512', type: 'image/jpeg' }
-				]
+				artwork: [{ src: coverUrl, sizes: '512x512', type: 'image/jpeg' }]
 			});
 		}
 
 		mediaSession.playbackState = audioElement?.paused ? 'paused' : 'playing';
 
-		// Clear position state to hide scrubber - makes it look like a livestream
 		if ('setPositionState' in mediaSession) {
 			mediaSession.setPositionState();
-		}
-	}
-
-	function syncAudioPosition(np: NowPlaying) {
-		if (!audioElement) {
-			setTimeout(() => syncAudioPosition(np), 100);
-			return;
-		}
-
-		const startedAt = new Date(np.started_at).getTime();
-		const now = Date.now();
-		const elapsedSeconds = (now - startedAt) / 1000;
-
-		const setPosition = () => {
-			if (!audioElement || elapsedSeconds < 0 || elapsedSeconds >= np.track.duration) return;
-
-			try {
-				audioElement.currentTime = elapsedSeconds;
-
-				// Only try to play if user has already started playback
-				if (hasStartedPlaying) {
-					audioElement.muted = isMuted;
-					audioElement.volume = 1.0;
-					audioElement.play();
-				}
-			} catch (err) {
-				console.error('Error setting audio position:', err);
-			}
-		};
-
-		if (audioElement.readyState >= 2) {
-			setPosition();
-		} else {
-			const onReady = () => {
-				setPosition();
-				audioElement?.removeEventListener('loadeddata', onReady);
-				audioElement?.removeEventListener('canplay', onReady);
-			};
-
-			audioElement.addEventListener('loadeddata', onReady, { once: true });
-			audioElement.addEventListener('canplay', onReady, { once: true });
-
-			setTimeout(() => {
-				if (audioElement && audioElement.readyState < 2) {
-					setPosition();
-				}
-			}, 2000);
 		}
 	}
 
@@ -314,36 +276,72 @@
 		return `${mins}:${secs.toString().padStart(2, '0')}`;
 	}
 
+	let isSkipping = $state(false);
+
 	async function handleSkip() {
-		if (!station || !authStore.isAdmin) return;
+		if (!station || !authStore.isAdmin || isSkipping) return;
+
+		isSkipping = true;
 
 		try {
+			// Immediately stop audio to prevent hearing old track
+			if (audioElement) {
+				audioElement.pause();
+				audioElement.currentTime = 0;
+			}
+
+			// Destroy HLS instance immediately
+			if (hls) {
+				hls.destroy();
+				hls = null;
+			}
+
+			// Call skip API - backend waits for first segment to be ready
 			await api.skipTrack(station.id);
-			currentTrackId = null;
+
+			// Update UI with new track info
 			await updateNowPlaying();
+
+			// Re-initialize HLS and start playback
+			initHls();
 		} catch (e) {
 			console.error('Failed to skip track:', e);
 			alert('Failed to skip track: ' + (e instanceof Error ? e.message : 'Unknown error'));
+		} finally {
+			isSkipping = false;
 		}
 	}
 
 	function startListening() {
-		if (!audioElement || !nowPlaying || !station) return;
+		if (!audioElement || !station) return;
 
 		hasStartedPlaying = true;
+
+		// Add buffering event listeners only once to avoid accumulation
+		if (!audioListenersAttached) {
+			audioElement.addEventListener('waiting', () => {
+				isBuffering = true;
+			});
+			audioElement.addEventListener('playing', () => {
+				isBuffering = false;
+			});
+			audioElement.addEventListener('canplay', () => {
+				isBuffering = false;
+			});
+			audioListenersAttached = true;
+		}
+
+		// Initialize HLS stream
+		initHls();
+
 		audioElement.muted = isMuted;
 		audioElement.volume = 1.0;
 
-		// Sync to correct position in the track
-		const startedAt = new Date(nowPlaying.started_at).getTime();
-		const now = Date.now();
-		const elapsedSeconds = (now - startedAt) / 1000;
-
-		if (elapsedSeconds >= 0 && elapsedSeconds < nowPlaying.track.duration) {
-			audioElement.currentTime = elapsedSeconds;
-		}
-
-		audioElement.play();
+		// Start playback
+		audioElement.play().catch((e) => {
+			console.error('Playback failed:', e);
+			hlsError = 'Click to retry playback';
+		});
 
 		// Start listener heartbeat
 		startHeartbeat();
@@ -352,10 +350,7 @@
 	function startHeartbeat() {
 		if (!station || heartbeatInterval) return;
 
-		// Send initial heartbeat
 		sendHeartbeat();
-
-		// Then send heartbeat every 10 seconds
 		heartbeatInterval = setInterval(sendHeartbeat, 10000);
 	}
 
@@ -364,7 +359,6 @@
 
 		try {
 			const result = await api.listenerHeartbeat(station.id, sessionId);
-			// Update listener count from heartbeat response
 			if (nowPlaying) {
 				nowPlaying.listeners = result.listeners;
 			}
@@ -376,7 +370,6 @@
 	function toggleMute() {
 		if (!audioElement) return;
 
-		// If user hasn't started playing yet, start playing
 		if (!hasStartedPlaying) {
 			startListening();
 			return;
@@ -384,13 +377,13 @@
 
 		isMuted = !isMuted;
 		audioElement.muted = isMuted;
-
 		localStorage.setItem('radio_muted', isMuted.toString());
 
 		if (!isMuted && audioElement.paused) {
 			audioElement.play();
 		}
 	}
+
 </script>
 
 <svelte:head>
@@ -417,18 +410,25 @@
 	</div>
 {:else if station && nowPlaying}
 	<div class="fixed inset-0 flex flex-col bg-gray-900 text-white p-2 overflow-hidden">
+		<!-- HLS Audio Element -->
 		<audio
 			bind:this={audioElement}
-			src="/api/v1/navidrome/stream/{nowPlaying.track.id}"
+			crossorigin="anonymous"
 		></audio>
 
-		<!-- Station name at top - compact -->
+		<!-- Station name at top -->
 		<div class="text-center shrink-0 leading-none">
 			<a href="/" class="text-blue-400 hover:text-blue-300 text-xs">← Back</a>
 			<h1 class="text-base md:text-lg font-bold">{station.name}</h1>
+			{#if hlsError}
+				<p class="text-yellow-500 text-xs">{hlsError}</p>
+			{/if}
+			{#if isBuffering}
+				<p class="text-gray-400 text-xs">Buffering...</p>
+			{/if}
 		</div>
 
-		<!-- Now playing - centered, takes remaining space -->
+		<!-- Now playing - centered -->
 		<div class="flex-1 flex flex-col items-center justify-center gap-1 min-h-0">
 			<!-- Start listening overlay -->
 			{#if !hasStartedPlaying}
@@ -451,46 +451,44 @@
 						>
 							Play Radio
 						</button>
+						<p class="text-xs text-gray-500">Live HLS Stream</p>
 					</div>
 				</div>
 			{/if}
 
-			<!-- Album art - responsive size based on viewport -->
-			{#if nowPlaying.track.albumArt}
-				<img
-					src={nowPlaying.track.albumArt}
-					alt={nowPlaying.track.album}
-					class="aspect-square rounded-lg shadow-2xl object-cover max-h-[30vh] md:max-h-[38vh] w-auto"
+			<!-- 3D Dancing Animals Visualizer -->
+			<div class="relative w-full flex-1 min-h-[200px] max-h-[60vh]">
+				<DancingAnimals
+					{audioElement}
+					isPlaying={hasStartedPlaying && !isMuted}
 				/>
-			{:else}
-				<div
-					class="aspect-square rounded-lg shadow-2xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center max-h-[30vh] md:max-h-[38vh]"
-					style="width: min(30vh, 38vh);"
-				>
-					<svg class="w-1/3 h-1/3 text-white" fill="currentColor" viewBox="0 0 20 20">
-						<path
-							d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z"
-						/>
-					</svg>
-				</div>
-			{/if}
+				<!-- Album art overlay in corner -->
+				{#if nowPlaying.track.albumArt && hasStartedPlaying}
+					<img
+						src={nowPlaying.track.albumArt}
+						alt={nowPlaying.track.album}
+						class="absolute bottom-2 right-2 w-12 h-12 md:w-16 md:h-16 rounded shadow-lg object-cover opacity-80 border border-gray-700"
+					/>
+				{/if}
+			</div>
 
-			<!-- Track info - compact -->
+			<!-- Track info -->
 			<div class="text-center w-full max-w-md px-2 shrink-0">
 				<h2 class="text-base md:text-lg font-bold truncate">{nowPlaying.track.title}</h2>
 				<p class="text-xs md:text-sm text-gray-300 truncate">{nowPlaying.track.artist}</p>
 				<p class="text-xs text-gray-500 truncate">{nowPlaying.track.album}</p>
 			</div>
 
-			<!-- Progress bar - compact -->
+			<!-- Progress bar -->
 			<div class="w-full max-w-md px-4 shrink-0">
 				<div class="flex items-center justify-between text-xs text-gray-500">
 					<span>{formatTime(currentPosition)}</span>
+					<span class="text-red-500 text-[10px] font-medium">LIVE</span>
 					<span>{formatTime(nowPlaying.track.duration)}</span>
 				</div>
 				<div class="w-full bg-gray-700 rounded-full h-1 overflow-hidden">
 					<div
-						class="bg-blue-500 h-full transition-all duration-200 ease-linear"
+						class="bg-red-500 h-full transition-all duration-200 ease-linear"
 						style="width: {(currentPosition / nowPlaying.track.duration) * 100}%"
 					></div>
 				</div>
@@ -522,7 +520,7 @@
 			</button>
 		</div>
 
-		<!-- Controls at bottom - single row -->
+		<!-- Controls at bottom -->
 		<div class="shrink-0 flex items-center justify-center gap-4 pb-safe">
 			<div class="flex items-center gap-1.5 text-sm text-gray-400">
 				<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -536,9 +534,10 @@
 			{#if authStore.isAdmin}
 				<button
 					onclick={handleSkip}
-					class="px-4 py-1.5 bg-orange-600 hover:bg-orange-700 rounded font-medium text-xs transition-colors active:scale-95"
+					disabled={isSkipping}
+					class="px-4 py-1.5 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-800 disabled:cursor-wait rounded font-medium text-xs transition-colors active:scale-95"
 				>
-					Skip
+					{isSkipping ? 'Skipping...' : 'Skip'}
 				</button>
 			{/if}
 		</div>
@@ -552,7 +551,6 @@
 		white-space: nowrap;
 	}
 
-	/* Safe area padding for iOS devices with notch/home indicator */
 	.pb-safe {
 		padding-bottom: env(safe-area-inset-bottom, 0);
 	}

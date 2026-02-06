@@ -1,14 +1,172 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { api, type CurationProgress, type EmbeddingProgress, type HybridCurationProgress, type SeedTrack, type SelectSeedsResponse } from '$lib/api/client';
+	import { api, type CurationProgress, type EmbeddingProgress, type HybridCurationProgress, type SeedTrack, type SelectSeedsResponse, type EmbeddingPoint } from '$lib/api/client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import type { Station } from '$lib/types';
-	import EmbeddingVisualization from '$lib/components/EmbeddingVisualization.svelte';
+
+	// Visualization state
+	let showVisualization = $state(false);
+	let vizLoading = $state(false);
+	let vizError = $state<string | null>(null);
+	let vizPoints = $state<EmbeddingPoint[]>([]);
+	let plotContainer: HTMLDivElement | undefined = $state();
+	let Plotly: typeof import('plotly.js-dist-min') | null = $state(null);
+
+	const categoryColors: Record<string, string> = {
+		'Hip-Hop': '#e6194b',
+		'Alternative': '#3cb44b',
+		'Rock': '#4363d8',
+		'Pop': '#f58231',
+		'R&B/Soul': '#911eb4',
+		'Jazz': '#46f0f0',
+		'Electronic': '#f032e6',
+		'Country': '#bcf60c',
+		'Metal': '#fabebe',
+		'Other': '#808080',
+	};
+
+	function categorizeGenre(genre: string | null): string {
+		if (!genre) return 'Other';
+		const g = genre.toLowerCase();
+		if (g.includes('rap') || g.includes('hip hop') || g.includes('hip-hop') || g.includes('screwed')) return 'Hip-Hop';
+		if (g.includes('alternative') || g.includes('indie')) return 'Alternative';
+		if (g.includes('rock') && !g.includes('alternative')) return 'Rock';
+		if (g.includes('pop')) return 'Pop';
+		if (g.includes('r&b') || g.includes('soul')) return 'R&B/Soul';
+		if (g.includes('jazz')) return 'Jazz';
+		if (g.includes('electro') || g.includes('dance') || g.includes('electronic')) return 'Electronic';
+		if (g.includes('country')) return 'Country';
+		if (g.includes('metal')) return 'Metal';
+		return 'Other';
+	}
+
+	async function loadVisualization() {
+		if (!Plotly) {
+			Plotly = await import('plotly.js-dist-min');
+		}
+
+		vizLoading = true;
+		vizError = null;
+
+		try {
+			const response = await api.getEmbeddingsForVisualization();
+			vizPoints = response.points;
+
+			if (vizPoints.length === 0) {
+				vizError = 'No embeddings found. Generate audio embeddings first.';
+				vizLoading = false;
+				return;
+			}
+
+			await renderPlot();
+		} catch (e) {
+			vizError = e instanceof Error ? e.message : 'Failed to load embeddings';
+		} finally {
+			vizLoading = false;
+		}
+	}
+
+	async function renderPlot() {
+		if (!plotContainer || !Plotly) return;
+
+		const categorizedPoints: Record<string, { x: number[], y: number[], text: string[] }> = {};
+
+		for (const p of vizPoints) {
+			const category = categorizeGenre(p.genre);
+			if (!categorizedPoints[category]) {
+				categorizedPoints[category] = { x: [], y: [], text: [] };
+			}
+			categorizedPoints[category].x.push(p.x);
+			categorizedPoints[category].y.push(p.y);
+			categorizedPoints[category].text.push(`${p.title}\n${p.artist}\n${p.genre || 'Unknown'}`);
+		}
+
+		const traces = Object.entries(categorizedPoints).map(([category, data]) => ({
+			x: data.x,
+			y: data.y,
+			mode: 'markers' as const,
+			type: 'scatter' as const,
+			name: category,
+			marker: {
+				size: 5,
+				color: categoryColors[category] || '#808080',
+				opacity: 0.8,
+			},
+			text: data.text,
+			hoverinfo: 'text' as const,
+			hoverlabel: {
+				bgcolor: '#0a0a0a',
+				bordercolor: categoryColors[category] || '#333',
+				font: { color: '#e0e0e0', size: 10, family: 'monospace' }
+			}
+		}));
+
+		traces.sort((a, b) => b.x.length - a.x.length);
+
+		const layout: Partial<Plotly.Layout> = {
+			paper_bgcolor: '#0a0a0a',
+			plot_bgcolor: '#111',
+			xaxis: {
+				title: { text: 'PCA-1', font: { color: '#444', size: 10 } },
+				color: '#444',
+				gridcolor: '#222',
+				zerolinecolor: '#333',
+				tickfont: { size: 8, color: '#444' }
+			},
+			yaxis: {
+				title: { text: 'PCA-2', font: { color: '#444', size: 10 } },
+				color: '#444',
+				gridcolor: '#222',
+				zerolinecolor: '#333',
+				tickfont: { size: 8, color: '#444' }
+			},
+			margin: { l: 40, r: 10, t: 10, b: 40 },
+			hovermode: 'closest',
+			legend: {
+				font: { color: '#888', size: 9, family: 'monospace' },
+				bgcolor: 'rgba(10, 10, 10, 0.9)',
+				bordercolor: '#333',
+				borderwidth: 1,
+				x: 1,
+				xanchor: 'right',
+				y: 1,
+			},
+			showlegend: true,
+		};
+
+		const config = {
+			responsive: true,
+			displayModeBar: false,
+			displaylogo: false,
+		};
+
+		await Plotly.newPlot(plotContainer, traces, layout, config);
+	}
+
+	async function toggleVisualization() {
+		showVisualization = !showVisualization;
+		if (showVisualization && vizPoints.length === 0) {
+			await loadVisualization();
+		}
+	}
+
+	$effect(() => {
+		if (plotContainer && Plotly && vizPoints.length > 0 && showVisualization) {
+			renderPlot();
+		}
+	});
+
+	// Tab state
+	let activeTab = $state<'library' | 'stations' | 'create' | 'settings'>('stations');
+
+	// Settings state
+	let siteTitle = $state('NAVIDROME RADIO');
+	let savingSettings = $state(false);
+	let settingsMessage = $state<string | null>(null);
 
 	let stations = $state<Station[]>([]);
 	let loading = $state(true);
-	let showCreateForm = $state(false);
 
 	// Create form fields
 	let path = $state('');
@@ -30,7 +188,7 @@
 	} | null>(null);
 	let showFullPlaylist = $state(false);
 
-	// AI Curation progress (now using HybridCurationProgress for the new hybrid endpoint)
+	// AI Curation progress
 	let curationProgress = $state<HybridCurationProgress | null>(null);
 	let curationAbort = $state<(() => void) | null>(null);
 	let curationComplete = $state(false);
@@ -69,7 +227,7 @@
 	let isPaused = $state(false);
 	let embeddingError = $state<string | null>(null);
 	let embeddingProgress = $state<EmbeddingProgress | null>(null);
-	let embeddingEventSource: EventSource | null = null;
+	let embeddingAbortController: AbortController | null = null;
 	let syncProgress = $state<{
 		type: string;
 		message: string;
@@ -81,9 +239,6 @@
 	} | null>(null);
 	let eventSource: EventSource | null = null;
 
-	// Visualization state
-	let showVisualization = $state(false);
-
 	let listenerCountInterval: number;
 
 	onMount(() => {
@@ -92,9 +247,8 @@
 			return;
 		}
 
-		Promise.all([loadStations(), loadAiCapabilities(), loadLibraryStats(), loadListenerCounts(), loadEmbeddingStatus()]);
+		Promise.all([loadStations(), loadAiCapabilities(), loadLibraryStats(), loadListenerCounts(), loadEmbeddingStatus(), loadSettings()]);
 
-		// Poll for listener counts every 5 seconds
 		listenerCountInterval = setInterval(loadListenerCounts, 5000);
 
 		return () => {
@@ -129,11 +283,33 @@
 		}
 	}
 
-	function handleStartEmbeddingIndex() {
-		// Close any existing connection
-		if (embeddingEventSource) {
-			embeddingEventSource.close();
-			embeddingEventSource = null;
+	async function loadSettings() {
+		try {
+			const settings = await api.getSettings();
+			siteTitle = settings.site_title;
+		} catch (e) {
+			console.error('Failed to load settings:', e);
+		}
+	}
+
+	async function saveSettings() {
+		savingSettings = true;
+		settingsMessage = null;
+		try {
+			await api.updateSettings({ site_title: siteTitle });
+			settingsMessage = 'Settings saved!';
+			setTimeout(() => settingsMessage = null, 3000);
+		} catch (e) {
+			settingsMessage = e instanceof Error ? e.message : 'Failed to save settings';
+		} finally {
+			savingSettings = false;
+		}
+	}
+
+	async function handleStartEmbeddingIndex() {
+		if (embeddingAbortController) {
+			embeddingAbortController.abort();
+			embeddingAbortController = null;
 		}
 
 		indexingEmbeddings = true;
@@ -141,7 +317,6 @@
 		embeddingError = null;
 		embeddingProgress = null;
 
-		// Get auth token for SSE connection (EventSource can't send custom headers, so use query param)
 		const token = localStorage.getItem('auth_token');
 		if (!token) {
 			embeddingError = 'Not authenticated';
@@ -149,45 +324,72 @@
 			return;
 		}
 
-		// No max_tracks limit - process all remaining tracks
-		const url = new URL('/api/v1/embeddings/index-stream', window.location.origin);
-		url.searchParams.set('token', token);
+		embeddingAbortController = new AbortController();
 
-		// Create EventSource connection
-		embeddingEventSource = new EventSource(url.toString());
+		try {
+			const response = await fetch('/api/v1/embeddings/index-stream', {
+				headers: {
+					'Authorization': `Bearer ${token}`
+				},
+				signal: embeddingAbortController.signal
+			});
 
-		embeddingEventSource.onmessage = (event) => {
-			try {
-				const progress = JSON.parse(event.data);
-				embeddingProgress = progress;
-
-				// Handle terminal states
-				if (progress.type === 'completed') {
-					indexingEmbeddings = false;
-					isPaused = false;
-					embeddingEventSource?.close();
-					embeddingEventSource = null;
-					loadEmbeddingStatus();
-				} else if (progress.type === 'error') {
-					indexingEmbeddings = false;
-					isPaused = false;
-					embeddingError = progress.message;
-					embeddingEventSource?.close();
-					embeddingEventSource = null;
-				}
-			} catch (e) {
-				console.error('Failed to parse SSE message:', e);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
 			}
-		};
 
-		embeddingEventSource.onerror = (error) => {
+			const reader = response.body?.getReader();
+			if (!reader) {
+				throw new Error('No response body');
+			}
+
+			const decoder = new TextDecoder();
+			let buffer = '';
+
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				buffer += decoder.decode(value, { stream: true });
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || '';
+
+				for (const line of lines) {
+					if (line.startsWith('data: ')) {
+						try {
+							const progress = JSON.parse(line.slice(6));
+							console.log('SSE progress:', progress);
+							embeddingProgress = progress;
+
+							if (progress.type === 'completed') {
+								indexingEmbeddings = false;
+								isPaused = false;
+								embeddingAbortController = null;
+								loadEmbeddingStatus();
+								return;
+							} else if (progress.type === 'error') {
+								indexingEmbeddings = false;
+								isPaused = false;
+								embeddingError = progress.message;
+								embeddingAbortController = null;
+								return;
+							}
+						} catch (e) {
+							console.error('Failed to parse SSE message:', e);
+						}
+					}
+				}
+			}
+		} catch (error) {
+			if (error instanceof Error && error.name === 'AbortError') {
+				return;
+			}
 			console.error('SSE connection error:', error);
 			indexingEmbeddings = false;
 			isPaused = false;
 			embeddingError = 'Connection to embedding stream failed';
-			embeddingEventSource?.close();
-			embeddingEventSource = null;
-		};
+			embeddingAbortController = null;
+		}
 	}
 
 	async function handlePauseEmbeddings() {
@@ -213,7 +415,6 @@
 	async function handleStopEmbeddings() {
 		try {
 			await api.stopEmbeddings();
-			// The SSE stream will complete with a "stopped" message
 		} catch (e) {
 			console.error('Failed to stop embeddings:', e);
 			embeddingError = e instanceof Error ? e.message : 'Failed to stop';
@@ -221,7 +422,6 @@
 	}
 
 	function handleSyncLibrary() {
-		// Close any existing connection
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;
@@ -231,7 +431,6 @@
 		syncError = null;
 		syncProgress = null;
 
-		// Get auth token for SSE connection (EventSource can't send custom headers, so use query param)
 		const token = localStorage.getItem('auth_token');
 		if (!token) {
 			syncError = 'Not authenticated';
@@ -242,7 +441,6 @@
 		const url = new URL('/api/v1/library/sync-stream', window.location.origin);
 		url.searchParams.set('token', token);
 
-		// Create EventSource connection
 		eventSource = new EventSource(url.toString());
 
 		eventSource.onmessage = (event) => {
@@ -250,7 +448,6 @@
 				const progress = JSON.parse(event.data);
 				syncProgress = progress;
 
-				// Handle terminal states
 				if (progress.type === 'completed') {
 					syncing = false;
 					eventSource?.close();
@@ -276,16 +473,15 @@
 		};
 	}
 
-	// Cleanup on component unmount
 	$effect(() => {
 		return () => {
 			if (eventSource) {
 				eventSource.close();
 				eventSource = null;
 			}
-			if (embeddingEventSource) {
-				embeddingEventSource.close();
-				embeddingEventSource = null;
+			if (embeddingAbortController) {
+				embeddingAbortController.abort();
+				embeddingAbortController = null;
 			}
 		};
 	});
@@ -323,7 +519,6 @@
 		selectedSeeds = [];
 
 		try {
-			// Phase 1: Select seeds for user review
 			curationProgress = {
 				step: 'selecting_seeds',
 				message: 'AI is selecting seed tracks...'
@@ -335,11 +530,9 @@
 			analyzingDescription = false;
 			curationProgress = null;
 
-			// Use the AI-determined genres from the backend
 			if (seedsResult.genres && seedsResult.genres.length > 0) {
 				genresInput = seedsResult.genres.join(', ');
 			} else {
-				// Fallback: leave empty or use a generic message
 				genresInput = '';
 			}
 		} catch (error) {
@@ -359,7 +552,7 @@
 			const excludeIds = selectedSeeds.map(s => s.id);
 			const result = await api.regenerateSeed(description, index, excludeIds);
 			selectedSeeds[index] = result.seed;
-			selectedSeeds = [...selectedSeeds]; // Trigger reactivity
+			selectedSeeds = [...selectedSeeds];
 		} catch (error) {
 			console.error('Failed to regenerate seed:', error);
 			createError = error instanceof Error ? error.message : 'Failed to regenerate seed';
@@ -394,7 +587,6 @@
 				sample_tracks: result.tracks.slice(0, 5).map(t => `${t.artist} - ${t.title}`)
 			};
 
-			// Clear progress after a moment
 			setTimeout(() => {
 				curationProgress = null;
 				curationPhase = 'idle';
@@ -403,7 +595,7 @@
 			console.error('Gap filling failed:', error);
 			createError = error instanceof Error ? error.message : 'Failed to fill gaps between seeds';
 			curationProgress = null;
-			curationPhase = 'reviewing_seeds'; // Go back to seed review
+			curationPhase = 'reviewing_seeds';
 		}
 	}
 
@@ -414,8 +606,6 @@
 
 		try {
 			const genres = genresInput.split(',').map((g) => g.trim()).filter(Boolean);
-
-			// Get track IDs from AI curation result if available
 			const trackIds = aiResult?.tracks?.map(t => t.id) || [];
 
 			await api.createStation({
@@ -426,16 +616,14 @@
 				track_ids: trackIds
 			});
 
-			// Reset form
 			path = '';
 			name = '';
 			description = '';
 			genresInput = '';
-			showCreateForm = false;
 			useAI = false;
 			aiResult = null;
+			activeTab = 'stations';
 
-			// Reload stations
 			await loadStations();
 		} catch (e) {
 			createError = e instanceof Error ? e.message : 'Failed to create station';
@@ -463,9 +651,7 @@
 	}
 
 	async function handleDeleteStation(id: string) {
-		if (!confirm('Are you sure you want to delete this station?')) {
-			return;
-		}
+		if (!confirm('Delete this station?')) return;
 
 		try {
 			await api.deleteStation(id);
@@ -475,7 +661,6 @@
 		}
 	}
 
-	// Playlist creation state
 	let creatingPlaylist = $state<string | null>(null);
 	let playlistSuccess = $state<{ stationId: string; name: string; trackCount: number } | null>(null);
 
@@ -490,7 +675,6 @@
 				name: result.name,
 				trackCount: result.track_count
 			};
-			// Auto-dismiss success after 5 seconds
 			setTimeout(() => {
 				if (playlistSuccess?.stationId === stationId) {
 					playlistSuccess = null;
@@ -512,13 +696,12 @@
 
 		expandedStationId = stationId;
 
-		// Load tracks if not already loaded
 		if (!stationTracks.get(stationId)) {
 			loadingStationTracks = stationId;
 			try {
 				const result = await api.getStationTracks(stationId, 200);
 				stationTracks.set(stationId, result.tracks);
-				stationTracks = stationTracks; // Trigger reactivity
+				stationTracks = stationTracks;
 			} catch (e) {
 				console.error('Failed to load station tracks:', e);
 			} finally {
@@ -526,964 +709,1184 @@
 			}
 		}
 	}
+
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === '1') {
+			activeTab = 'stations';
+		} else if (e.key === '2') {
+			activeTab = 'library';
+		} else if (e.key === '3') {
+			activeTab = 'create';
+		}
+	}
 </script>
 
-<div class="container mx-auto px-4 py-8 max-w-6xl">
-	<div class="mb-8">
-		<div class="flex items-start justify-between">
-			<div>
-				<h1 class="text-3xl font-bold mb-4">Admin Dashboard</h1>
-				<p class="text-gray-400">Manage your radio stations</p>
-			</div>
+<svelte:window on:keydown={handleKeydown} />
 
-			<!-- AI Capabilities Badge -->
-			{#if aiAvailable}
-				<div class="bg-gradient-to-r from-purple-600 to-blue-600 rounded-lg p-4 max-w-sm">
-					<div class="flex items-center gap-2 mb-2">
-						<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-							></path>
-						</svg>
-						<span class="font-bold">AI Features Active</span>
-					</div>
-					<ul class="text-sm space-y-1 opacity-90">
-						{#each aiFeatures as feature}
-							<li>• {feature}</li>
-						{/each}
-					</ul>
-				</div>
-			{:else}
-				<div class="bg-gray-700 rounded-lg p-4 max-w-sm">
-					<p class="text-sm text-gray-400">
-						<span class="font-semibold">AI features disabled</span><br />
-						Configure ANTHROPIC_API_KEY to enable AI-powered station creation
-					</p>
-				</div>
-			{/if}
+<div class="admin-container">
+	<!-- Header -->
+	<header class="header">
+		<div class="header-content">
+			<span class="header-border">┌──</span>
+			<h1 class="title">ADMIN DASHBOARD</h1>
+			<span class="header-border">──┐</span>
 		</div>
-	</div>
-
-	<!-- Library Sync Section -->
-	<div class="mb-8 bg-gray-800 rounded-lg p-6">
-		<div class="flex items-start justify-between mb-4">
-			<div>
-				<h2 class="text-xl font-bold mb-2">Library Management</h2>
-				<p class="text-gray-400 text-sm">Sync your Navidrome library to enable AI-powered curation</p>
-			</div>
-			<button
-				onclick={handleSyncLibrary}
-				disabled={syncing}
-				class="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white px-4 py-2 rounded font-semibold"
-			>
-				{#if syncing}
-					<div class="flex items-center gap-2">
-						<svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-						</svg>
-						Syncing...
-					</div>
-				{:else}
-					Sync Library
-				{/if}
-			</button>
+		<div class="header-sub">
+			<span class="sub-border">│</span>
+			<a href="/" class="back-link">← Back to Radio</a>
+			<span class="user-info">● {authStore.user?.username}</span>
+			<span class="sub-border">│</span>
 		</div>
+	</header>
 
-		{#if libraryStats}
-			<div class="grid grid-cols-3 gap-4">
-				<div class="bg-gray-700 rounded p-4">
-					<div class="text-2xl font-bold text-blue-400">{libraryStats.total_tracks.toLocaleString()}</div>
-					<div class="text-sm text-gray-400">Total Tracks</div>
-				</div>
-				<div class="bg-gray-700 rounded p-4">
-					{#if embeddingStatus}
-						{@const liveCompleted = indexingEmbeddings && embeddingProgress?.success_count !== undefined
-							? embeddingStatus.tracks_with_embeddings + embeddingProgress.success_count
-							: embeddingStatus.tracks_with_embeddings}
-						{@const livePercent = embeddingStatus.total_tracks > 0
-							? (liveCompleted / embeddingStatus.total_tracks) * 100
-							: 0}
-						<div class="text-2xl font-bold text-purple-400 {indexingEmbeddings ? 'animate-pulse' : ''}">
-							{livePercent.toFixed(1)}%
-						</div>
-						<div class="text-sm text-gray-400">Audio Embeddings</div>
-						<div class="text-xs text-gray-500 mt-1">
-							{liveCompleted.toLocaleString()} / {embeddingStatus.total_tracks.toLocaleString()} tracks
-							{#if indexingEmbeddings && embeddingProgress?.success_count}
-								<span class="text-green-400">(+{embeddingProgress.success_count} new)</span>
-							{/if}
-						</div>
-						<!-- Progress bar -->
-						<div class="mt-2 bg-gray-600 rounded-full h-1.5 overflow-hidden">
-							<div
-								class="bg-purple-500 h-full transition-all duration-300"
-								style="width: {livePercent}%"
-							></div>
-						</div>
-					{:else}
-						<div class="text-2xl font-bold text-gray-500">--</div>
-						<div class="text-sm text-gray-400">Audio Embeddings</div>
-					{/if}
-				</div>
-				<div class="bg-gray-700 rounded p-4">
-					<div class="text-sm text-gray-400">Last Sync</div>
-					<div class="text-sm font-semibold">{libraryStats.computed_at ? new Date(libraryStats.computed_at).toLocaleString() : 'Never'}</div>
-				</div>
-			</div>
-
-			<!-- Embedding Controls -->
-			{#if embeddingStatus && embeddingStatus.coverage_percent < 100}
-				<div class="mt-4 flex flex-wrap items-center gap-3">
-					{#if !indexingEmbeddings}
-						<button
-							onclick={handleStartEmbeddingIndex}
-							disabled={syncing}
-							class="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white px-4 py-2 rounded font-semibold text-sm"
-						>
-							Generate Audio Embeddings
-						</button>
-					{:else}
-						<!-- Pause/Resume button -->
-						{#if isPaused}
-							<button
-								onclick={handleResumeEmbeddings}
-								class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded font-semibold text-sm flex items-center gap-2"
-							>
-								<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-									<path d="M8 5v14l11-7z"/>
-								</svg>
-								Resume
-							</button>
-						{:else}
-							<button
-								onclick={handlePauseEmbeddings}
-								class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-semibold text-sm flex items-center gap-2"
-							>
-								<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-									<path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
-								</svg>
-								Pause
-							</button>
-						{/if}
-						<!-- Stop button -->
-						<button
-							onclick={handleStopEmbeddings}
-							class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-semibold text-sm flex items-center gap-2"
-						>
-							<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-								<path d="M6 6h12v12H6z"/>
-							</svg>
-							Stop
-						</button>
-					{/if}
-					<span class="text-xs text-gray-500">
-						{#if indexingEmbeddings}
-							{#if isPaused}
-								Paused - click Resume to continue
-							{:else}
-								Processing all remaining tracks...
-							{/if}
-						{:else}
-							Analyzes audio files to enable ML-powered track similarity
-						{/if}
-					</span>
-				</div>
-			{/if}
-
-			{#if embeddingError}
-				<div class="mt-4 bg-red-900/30 border border-red-600/50 rounded p-4">
-					<p class="text-red-200 text-sm">{embeddingError}</p>
-				</div>
-			{/if}
-
-			<!-- Embedding Progress Display -->
-			{#if embeddingProgress}
-				<div class="mt-4 bg-purple-900/30 border border-purple-600/50 rounded p-4">
-					<div class="flex items-start gap-3">
-						<!-- Progress icon -->
-						<div class="flex-shrink-0 mt-0.5">
-							{#if embeddingProgress.type === 'error'}
-								<div class="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
-									<svg class="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-									</svg>
-								</div>
-							{:else if embeddingProgress.type === 'completed'}
-								<div class="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
-									<svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-									</svg>
-								</div>
-							{:else}
-								<div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center relative">
-									<svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
-									</svg>
-									<div class="absolute inset-0 rounded-full border-2 border-purple-400/50 animate-ping"></div>
-								</div>
-							{/if}
-						</div>
-
-						<div class="flex-1 min-w-0">
-							<!-- Current status message -->
-							<div class="font-semibold text-lg text-white">
-								{#if embeddingProgress.type === 'started'}
-									Starting Audio Analysis
-								{:else if embeddingProgress.type === 'processing' || embeddingProgress.type === 'track_complete'}
-									Generating Audio Embeddings
-								{:else if embeddingProgress.type === 'track_error'}
-									Processing (with errors)
-								{:else if embeddingProgress.type === 'completed'}
-									Audio Analysis Complete!
-								{:else if embeddingProgress.type === 'error'}
-									Error
-								{:else}
-									Processing...
-								{/if}
-							</div>
-
-							<!-- Status message -->
-							{#if embeddingProgress.message}
-								<div class="text-sm text-purple-300 mt-1">{embeddingProgress.message}</div>
-							{/if}
-
-							<!-- Tracks currently being processed in parallel -->
-							{#if embeddingProgress.in_progress && embeddingProgress.in_progress.length > 0}
-								<div class="mt-2 space-y-1">
-									<div class="text-xs text-purple-400 font-medium">Processing {embeddingProgress.in_progress.length} tracks in parallel:</div>
-									<div class="flex flex-wrap gap-1.5">
-										{#each embeddingProgress.in_progress as track}
-											{@const parts = track.split(' - ')}
-											{@const artist = parts[0] || ''}
-											{@const title = parts.slice(1).join(' - ') || track}
-											<div class="text-xs text-purple-200 bg-purple-900/50 border border-purple-700/50 rounded px-2 py-1.5 flex items-start gap-1.5 max-w-[220px]">
-												<span class="text-purple-400 animate-pulse mt-0.5">♪</span>
-												<div class="flex flex-col min-w-0">
-													<span class="truncate font-medium" title={title}>{title}</span>
-													<span class="truncate text-[10px] italic text-purple-300/70" title={artist}>{artist}</span>
-												</div>
-											</div>
-										{/each}
-									</div>
-								</div>
-							{:else if embeddingProgress.current_track}
-								<!-- Fallback for legacy single track -->
-								<div class="mt-2 text-sm text-purple-200 flex items-center gap-2 bg-purple-900/30 rounded p-2">
-									<span class="text-purple-400">♪</span>
-									<span class="truncate">{embeddingProgress.current_track}</span>
-								</div>
-							{/if}
-
-							<!-- Track completion info -->
-							{#if embeddingProgress.type === 'track_complete' && embeddingProgress.track_name}
-								<div class="mt-2 text-sm text-green-300 flex items-center gap-2">
-									<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-									</svg>
-									<span class="truncate">{embeddingProgress.track_name}</span>
-									{#if embeddingProgress.processing_time_ms}
-										<span class="text-gray-500 text-xs">({embeddingProgress.processing_time_ms}ms)</span>
-									{/if}
-								</div>
-							{/if}
-
-							<!-- Progress bar -->
-							{#if (embeddingProgress.total ?? 0) > 0}
-								{@const progressCurrent = embeddingProgress.completed ?? embeddingProgress.current ?? 0}
-								{@const progressTotal = embeddingProgress.total ?? 0}
-								<div class="mt-3">
-									<div class="flex justify-between text-xs text-gray-400 mb-1">
-										<span>Completed {progressCurrent} of {progressTotal}</span>
-										<span>{Math.round((progressCurrent / progressTotal) * 100)}%</span>
-									</div>
-									<div class="bg-gray-700 rounded-full h-2 overflow-hidden">
-										<div
-											class="h-full transition-all duration-300 {embeddingProgress.type === 'error' ? 'bg-red-500' : embeddingProgress.type === 'completed' ? 'bg-green-500' : 'bg-purple-500'}"
-											style="width: {Math.round((progressCurrent / progressTotal) * 100)}%"
-										></div>
-									</div>
-								</div>
-							{/if}
-
-							<!-- Success/Error counts -->
-							{#if embeddingProgress.success_count !== undefined || embeddingProgress.error_count !== undefined}
-								<div class="mt-3 flex gap-4 text-sm">
-									{#if embeddingProgress.success_count !== undefined}
-										<div class="flex items-center gap-1 text-green-400">
-											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-											</svg>
-											<span>{embeddingProgress.success_count} successful</span>
-										</div>
-									{/if}
-									{#if embeddingProgress.error_count !== undefined && embeddingProgress.error_count > 0}
-										<div class="flex items-center gap-1 text-red-400">
-											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-											</svg>
-											<span>{embeddingProgress.error_count} errors</span>
-										</div>
-									{/if}
-								</div>
-							{/if}
-
-							<!-- Completion time -->
-							{#if embeddingProgress.type === 'completed' && embeddingProgress.total_time_secs}
-								<div class="mt-2 text-sm text-gray-400">
-									Completed in {embeddingProgress.total_time_secs.toFixed(1)} seconds
-								</div>
-							{/if}
-						</div>
-					</div>
-				</div>
-			{/if}
-		{:else}
-			<div class="bg-yellow-900/30 border border-yellow-600/50 rounded p-4">
-				<p class="text-yellow-200 text-sm">
-					No library data found. Click "Sync Library" to index your Navidrome tracks.
-				</p>
-			</div>
-		{/if}
-
-		{#if syncError}
-			<div class="mt-4 bg-red-900/30 border border-red-600/50 rounded p-4">
-				<p class="text-red-200 text-sm">{syncError}</p>
-			</div>
-		{/if}
-
-		<!-- Real-time Progress Display -->
-		{#if syncProgress}
-			<div class="mt-4 bg-blue-900/30 border border-blue-600/50 rounded p-4">
-				<div class="flex items-center gap-3 mb-3">
-					<svg class="w-5 h-5 text-blue-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-					</svg>
-					<div class="flex-1">
-						<div class="text-sm font-semibold text-blue-200">{syncProgress.message}</div>
-						{#if syncProgress.type === 'processing' && syncProgress.current && syncProgress.total}
-							<div class="text-xs text-blue-300 mt-1">
-								Processing {syncProgress.current.toLocaleString()} of {syncProgress.total.toLocaleString()} tracks
-								{#if syncProgress.new_tracks}
-									<span class="text-green-400">({syncProgress.new_tracks} new)</span>
-								{/if}
-							</div>
-							<div class="mt-2 bg-gray-700 rounded-full h-2 overflow-hidden">
-								<div
-									class="bg-blue-500 h-full transition-all duration-300"
-									style="width: {Math.round((syncProgress.current / syncProgress.total) * 100)}%"
-								></div>
-							</div>
-							<div class="text-xs text-right text-gray-400 mt-1">
-								{Math.round((syncProgress.current / syncProgress.total) * 100)}%
-							</div>
-						{:else if syncProgress.type === 'fetching' && syncProgress.iteration}
-							<div class="text-xs text-blue-300 mt-1">
-								Iteration {syncProgress.iteration}
-							</div>
-						{/if}
-					</div>
-				</div>
-			</div>
-		{/if}
-	</div>
-
-	<!-- Embedding Visualization Section -->
-	{#if embeddingStatus && embeddingStatus.tracks_with_embeddings > 0}
-		<div class="mb-8">
-			<button
-				onclick={() => (showVisualization = !showVisualization)}
-				class="flex items-center gap-2 text-purple-400 hover:text-purple-300 mb-4 transition-colors"
-			>
-				<svg class="w-5 h-5 transition-transform {showVisualization ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
-				</svg>
-				<span class="font-medium">{showVisualization ? 'Hide' : 'Show'} Embedding Visualization</span>
-				<span class="text-xs text-gray-500">({embeddingStatus.tracks_with_embeddings.toLocaleString()} tracks)</span>
-			</button>
-
-			{#if showVisualization}
-				<EmbeddingVisualization />
-			{/if}
-		</div>
-	{/if}
-
-	<!-- Create Station Button -->
-	<div class="mb-8">
-		<button
-			onclick={() => (showCreateForm = !showCreateForm)}
-			class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-semibold"
-		>
-			{showCreateForm ? 'Cancel' : '+ Create New Station'}
+	<!-- Tab Navigation -->
+	<nav class="tabs">
+		<span class="tab-border">├─</span>
+		<button class="tab" class:active={activeTab === 'stations'} onclick={() => activeTab = 'stations'}>
+			[1] STATIONS ({stations.length})
 		</button>
-	</div>
+		<button class="tab" class:active={activeTab === 'library'} onclick={() => activeTab = 'library'}>
+			[2] LIBRARY
+		</button>
+		<button class="tab" class:active={activeTab === 'create'} onclick={() => activeTab = 'create'}>
+			[3] CREATE
+		</button>
+		<button class="tab" class:active={activeTab === 'settings'} onclick={() => activeTab = 'settings'}>
+			[4] SETTINGS
+		</button>
+		{#if aiAvailable}
+			<span class="ai-badge">● AI</span>
+		{/if}
+		<span class="tab-border-end">─┤</span>
+	</nav>
 
-	<!-- Create Form -->
-	{#if showCreateForm}
-		<div class="bg-gray-800 rounded-lg p-6 mb-8">
-			<h2 class="text-xl font-bold mb-4">Create New Station</h2>
-
-			{#if createError}
-				<div class="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded mb-4">
-					{createError}
+	<!-- Main Content -->
+	<main class="main-content">
+		{#if loading}
+			<div class="loading">
+				<pre class="blink">LOADING...</pre>
+			</div>
+		{:else if activeTab === 'stations'}
+			<!-- Stations Tab -->
+			<div class="panel">
+				<div class="panel-header">
+					<span>┌─ STATIONS ────────────────────────────────────────────────────────────────────┐</span>
 				</div>
-			{/if}
+				<div class="panel-content stations-grid">
+					{#if stations.length === 0}
+						<div class="empty-state">No stations yet. Press [3] to create one.</div>
+					{:else}
+						{#each stations as station, i}
+							<div class="station-row" class:expanded={expandedStationId === station.id}>
+								<span class="station-index">{(i + 1).toString().padStart(2, '0')}</span>
+								<span class="station-status" class:live={station.active}>
+									{station.active ? '●' : '○'}
+								</span>
+								<span class="station-name">{station.name}</span>
+								<span class="station-listeners">[{listenerCounts[station.id] || 0}]</span>
+								<span class="station-genres">
+									{station.genres.slice(0, 2).join(', ')}
+								</span>
+								<div class="station-actions">
+									{#if station.active}
+										<button class="action-btn stop" onclick={() => handleStopStation(station.id)}>[STOP]</button>
+									{:else}
+										<button class="action-btn start" onclick={() => handleStartStation(station.id)}>[START]</button>
+									{/if}
+									<button class="action-btn" onclick={() => toggleStationTracks(station.id)}>
+										[{expandedStationId === station.id ? 'HIDE' : 'TRACKS'}]
+									</button>
+									<button class="action-btn export" onclick={() => handleCreatePlaylist(station.id, station.name)} disabled={creatingPlaylist === station.id}>
+										[EXPORT]
+									</button>
+									<button class="action-btn delete" onclick={() => handleDeleteStation(station.id)}>[DEL]</button>
+								</div>
 
-			<form onsubmit={handleCreateStation}>
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-					<div>
-						<label for="name" class="block text-sm font-medium text-gray-300 mb-2">
-							Station Name
-						</label>
-						<input
-							type="text"
-							id="name"
-							bind:value={name}
-							required
-							class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
-							placeholder="My Awesome Station"
-						/>
+								{#if playlistSuccess?.stationId === station.id}
+									<div class="success-msg">✓ Exported {playlistSuccess.trackCount} tracks</div>
+								{/if}
+
+								{#if expandedStationId === station.id}
+									<div class="tracks-panel">
+										{#if loadingStationTracks === station.id}
+											<span class="blink">Loading tracks...</span>
+										{:else if stationTracks.get(station.id)?.length}
+											<div class="tracks-header">
+												<span>{stationTracks.get(station.id)?.length} tracks</span>
+											</div>
+											<div class="tracks-list-scroll">
+												{#each (stationTracks.get(station.id) || []) as track, ti}
+													<div class="track-row">
+														<span class="track-num">{(ti + 1).toString().padStart(3, '0')}</span>
+														<span class="track-artist">{track.artist}</span>
+														<span class="track-sep">-</span>
+														<span class="track-title">{track.title}</span>
+													</div>
+												{/each}
+											</div>
+										{:else}
+											<span class="empty">No tracks yet</span>
+										{/if}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					{/if}
+				</div>
+				<div class="panel-footer">
+					<span>└─────────────────────────────────────────────────────────────────────────────────┘</span>
+				</div>
+			</div>
+
+		{:else if activeTab === 'library'}
+			<!-- Library Tab -->
+			<div class="panel">
+				<div class="panel-header">
+					<span>┌─ LIBRARY MANAGEMENT ─────────────────────────────────────────────────────────┐</span>
+				</div>
+				<div class="panel-content library-content">
+					<div class="stats-row">
+						<div class="stat-box">
+							<span class="stat-label">TRACKS</span>
+							<span class="stat-value">{libraryStats?.total_tracks.toLocaleString() || '--'}</span>
+						</div>
+						<div class="stat-box">
+							<span class="stat-label">EMBEDDINGS</span>
+							<span class="stat-value" class:processing={indexingEmbeddings}>
+								{embeddingStatus?.coverage_percent.toFixed(1) || '--'}%
+							</span>
+							<span class="stat-sub">
+								{embeddingStatus?.tracks_with_embeddings.toLocaleString() || 0} / {embeddingStatus?.total_tracks.toLocaleString() || 0}
+							</span>
+						</div>
+						<div class="stat-box">
+							<span class="stat-label">LAST SYNC</span>
+							<span class="stat-value-sm">{libraryStats?.computed_at ? new Date(libraryStats.computed_at).toLocaleDateString() : 'Never'}</span>
+						</div>
 					</div>
 
-					<div>
-						<label for="path" class="block text-sm font-medium text-gray-300 mb-2">
-							URL Path
-						</label>
-						<input
-							type="text"
-							id="path"
-							bind:value={path}
-							required
-							pattern="[a-z0-9-]+"
-							class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
-							placeholder="my-awesome-station"
-						/>
-						<p class="text-xs text-gray-400 mt-1">lowercase, numbers, and hyphens only</p>
-					</div>
-				</div>
-
-				<div class="mb-4">
-					<label for="description" class="block text-sm font-medium text-gray-300 mb-2">
-						Description
-						{#if aiAvailable}
-							<span class="text-xs text-purple-400">(AI will analyze this)</span>
-						{/if}
-					</label>
-					<textarea
-						id="description"
-						bind:value={description}
-						required
-						rows="3"
-						class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
-						placeholder="Describe the vibe and music style of this station... e.g., 'Chill vibes for late night coding sessions with ambient electronic music'"
-					></textarea>
-				</div>
-
-				{#if aiAvailable && description.trim()}
-					<div class="mb-4">
-						<button
-							type="button"
-							onclick={handleAnalyzeDescription}
-							disabled={analyzingDescription}
-							class="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white text-sm rounded-lg"
-						>
-							{#if analyzingDescription}
-								<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-									<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-								</svg>
-								Searching your library...
-							{:else}
-								<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-									></path>
-								</svg>
-								Find Matching Tracks with AI
-							{/if}
+					<div class="actions-row">
+						<button class="tui-btn" onclick={handleSyncLibrary} disabled={syncing}>
+							{syncing ? '[SYNCING...]' : '[SYNC LIBRARY]'}
 						</button>
+						{#if embeddingStatus && embeddingStatus.coverage_percent < 100}
+							{#if !indexingEmbeddings}
+								<button class="tui-btn" onclick={handleStartEmbeddingIndex} disabled={syncing}>
+									[GENERATE EMBEDDINGS]
+								</button>
+							{:else}
+								{#if isPaused}
+									<button class="tui-btn" onclick={handleResumeEmbeddings}>[RESUME]</button>
+								{:else}
+									<button class="tui-btn" onclick={handlePauseEmbeddings}>[PAUSE]</button>
+								{/if}
+								<button class="tui-btn stop" onclick={handleStopEmbeddings}>[STOP]</button>
+							{/if}
+						{/if}
 					</div>
 
-					<!-- AI Curation Progress Display (Hybrid Curation) -->
-					{#if curationProgress}
-						{@const steps = ['started', 'checking_embeddings', 'selecting_seeds', 'seeds_selected', 'generating_embeddings', 'filling_gaps', 'completed']}
-						{@const stepLabels = ['Starting', 'Checking Audio', 'AI Selecting Seeds', 'Seeds Ready', 'Generating Embeddings', 'Finding Similar', 'Complete']}
-						{@const currentIndex = steps.indexOf(curationProgress.step)}
-						<div class="mb-4 bg-gradient-to-r from-purple-900/40 to-blue-900/40 border border-purple-500/50 rounded-lg p-4 transition-all duration-500">
-							<div class="flex items-start gap-4">
-								<!-- Step indicator icon -->
-								<div class="flex-shrink-0 mt-0.5">
-									{#if curationProgress.step === 'error'}
-										<div class="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
-											<svg class="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-											</svg>
-										</div>
-									{:else if curationProgress.step === 'completed'}
-										<div class="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
-											<svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-											</svg>
-										</div>
-									{:else if curationProgress.step === 'checking_embeddings'}
-										<div class="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center relative">
-											<svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
-											</svg>
-											<div class="absolute inset-0 rounded-full border-2 border-blue-400/50 animate-ping"></div>
-										</div>
-									{:else if curationProgress.step === 'generating_embeddings'}
-										<div class="w-10 h-10 rounded-full bg-orange-500/20 flex items-center justify-center relative">
-											<svg class="w-6 h-6 text-orange-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path>
-											</svg>
-											<div class="absolute inset-0 rounded-full border-2 border-orange-400/50 animate-ping"></div>
-										</div>
-									{:else if curationProgress.step === 'filling_gaps'}
-										<div class="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center relative">
-											<svg class="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
-											</svg>
-											<div class="absolute inset-0 rounded-full border-2 border-cyan-400/50 animate-ping"></div>
+					{#if syncProgress}
+						<div class="progress-box">
+							<span class="progress-label">{syncProgress.message}</span>
+							{#if syncProgress.current && syncProgress.total}
+								<div class="progress-bar">
+									<div class="progress-fill" style="width: {(syncProgress.current / syncProgress.total) * 100}%"></div>
+								</div>
+								<span class="progress-pct">{Math.round((syncProgress.current / syncProgress.total) * 100)}%</span>
+							{/if}
+						</div>
+					{/if}
+
+					{#if embeddingProgress}
+						<div class="progress-box embedding">
+							<span class="progress-label">{embeddingProgress.message || 'Processing...'}</span>
+							{#if embeddingProgress.in_progress && embeddingProgress.in_progress.length > 0}
+								<div class="current-tracks">
+									{#each embeddingProgress.in_progress.slice(0, 3) as track}
+										<span class="current-track">♪ {track}</span>
+									{/each}
+								</div>
+							{/if}
+							{#if embeddingProgress.total && embeddingProgress.total > 0}
+								{@const pct = ((embeddingProgress.completed || embeddingProgress.current || 0) / embeddingProgress.total) * 100}
+								<div class="progress-bar">
+									<div class="progress-fill" style="width: {pct}%"></div>
+								</div>
+								<span class="progress-pct">{Math.round(pct)}%</span>
+							{/if}
+							{#if embeddingProgress.success_count !== undefined}
+								<span class="progress-stats">✓ {embeddingProgress.success_count} {embeddingProgress.error_count ? `✗ ${embeddingProgress.error_count}` : ''}</span>
+							{/if}
+						</div>
+					{/if}
+
+					{#if syncError}
+						<div class="error-box">{syncError}</div>
+					{/if}
+					{#if embeddingError}
+						<div class="error-box">{embeddingError}</div>
+					{/if}
+
+					<!-- Visualization Section -->
+					{#if embeddingStatus && embeddingStatus.tracks_with_embeddings > 0}
+						<div class="viz-section">
+							<button class="viz-toggle" onclick={toggleVisualization}>
+								<span class="viz-arrow">{showVisualization ? '▼' : '►'}</span>
+								<span>EMBEDDING VISUALIZATION</span>
+								<span class="viz-count">({embeddingStatus.tracks_with_embeddings.toLocaleString()} tracks)</span>
+								{#if vizLoading}
+									<span class="blink">loading...</span>
+								{/if}
+							</button>
+
+							{#if showVisualization}
+								<div class="viz-container">
+									{#if vizError}
+										<div class="error-box">{vizError}</div>
+									{:else if vizLoading}
+										<div class="viz-loading">
+											<span class="blink">Loading visualization data...</span>
 										</div>
 									{:else}
-										<div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center relative">
-											<svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
-											</svg>
-											<div class="absolute inset-0 rounded-full border-2 border-purple-400/50 animate-ping"></div>
-										</div>
+										<div bind:this={plotContainer} class="viz-plot"></div>
+										<div class="viz-help">Hover for track info. Click legend to filter genres.</div>
 									{/if}
 								</div>
-
-								<div class="flex-1 min-w-0">
-									<!-- Current step message -->
-									<div class="font-semibold text-lg text-white">{curationProgress.message}</div>
-
-									<!-- Embedding coverage display -->
-									{#if curationProgress.step === 'checking_embeddings' && curationProgress.coverage_percent !== undefined}
-										<div class="mt-2 text-sm text-blue-300 flex items-center gap-2">
-											<span>🎵</span>
-											<span>Audio embedding coverage: {curationProgress.coverage_percent.toFixed(1)}%</span>
-										</div>
-									{/if}
-
-									<!-- Seeds selected display -->
-									{#if curationProgress.step === 'seeds_selected' && curationProgress.seeds}
-										<div class="mt-2">
-											<div class="text-sm text-purple-300 flex items-center gap-2 mb-1">
-												<span>🌱</span>
-												<span>Seed tracks selected: {curationProgress.count}</span>
-											</div>
-											<div class="flex flex-wrap gap-1 mt-1">
-												{#each curationProgress.seeds.slice(0, 5) as seed}
-													<span class="text-xs bg-purple-800/50 text-purple-200 px-2 py-1 rounded-full truncate max-w-48">
-														{seed}
-													</span>
-												{/each}
-												{#if curationProgress.seeds.length > 5}
-													<span class="text-xs text-gray-400">+{curationProgress.seeds.length - 5} more</span>
-												{/if}
-											</div>
-										</div>
-									{/if}
-
-									<!-- Generating embeddings display -->
-									{#if curationProgress.step === 'generating_embeddings'}
-										<div class="mt-2 text-sm text-orange-300">
-											<div class="flex items-center gap-2 mb-2">
-												<span>🧬</span>
-												<span>Analyzing audio: {curationProgress.current} of {curationProgress.total}</span>
-											</div>
-											{#if curationProgress.track_name}
-												<div class="text-xs text-orange-200 bg-orange-900/30 rounded px-2 py-1.5 flex items-center gap-2">
-													<span class="text-orange-400 animate-pulse">♪</span>
-													<span class="truncate">{curationProgress.track_name}</span>
-												</div>
-											{/if}
-											<!-- Mini progress bar -->
-											{#if curationProgress.total && curationProgress.total > 0}
-												<div class="mt-2 bg-gray-700 rounded-full h-1.5 overflow-hidden">
-													<div
-														class="bg-orange-500 h-full transition-all duration-300"
-														style="width: {((curationProgress.current || 0) / curationProgress.total) * 100}%"
-													></div>
-												</div>
-											{/if}
-										</div>
-									{/if}
-
-									<!-- Filling gaps display -->
-									{#if curationProgress.step === 'filling_gaps'}
-										<div class="mt-2 text-sm text-cyan-300">
-											<div class="flex items-center gap-2 mb-1">
-												<span>🔗</span>
-												<span>Segment {curationProgress.segment} of {curationProgress.total_segments}</span>
-											</div>
-											{#if curationProgress.from_seed && curationProgress.to_seed}
-												<div class="text-xs text-gray-400 bg-gray-800/50 rounded px-2 py-1">
-													{curationProgress.from_seed} → {curationProgress.to_seed}
-												</div>
-											{/if}
-										</div>
-									{/if}
-
-									<!-- Final track count -->
-									{#if curationProgress.step === 'completed' && curationProgress.total_tracks}
-										<div class="mt-2 text-sm text-green-300 font-medium flex items-center gap-2">
-											<span>✅</span>
-											<span>{curationProgress.total_tracks} tracks curated</span>
-											{#if curationProgress.method}
-												<span class="text-xs text-gray-400">({curationProgress.method} mode)</span>
-											{/if}
-										</div>
-										{#if curationProgress.seed_count && curationProgress.filled_count}
-											<div class="text-xs text-gray-400 mt-1">
-												{curationProgress.seed_count} seeds + {curationProgress.filled_count} similar tracks
-											</div>
-										{/if}
-									{/if}
-
-									<!-- Step progress indicator -->
-									<div class="mt-4">
-										<div class="flex items-center gap-1 mb-2">
-											{#each steps as step, i}
-												<div
-													class="h-2 flex-1 rounded-full transition-all duration-500 ease-out {i < currentIndex ? 'bg-purple-500' : i === currentIndex ? (curationProgress.step === 'completed' ? 'bg-green-500' : 'bg-purple-400') : 'bg-gray-700'}"
-												></div>
-											{/each}
-										</div>
-										<div class="flex justify-between text-xs">
-											<span class="text-gray-500">Step {Math.max(1, currentIndex + 1)} of {steps.length}</span>
-											<span class="text-purple-400 font-medium">{stepLabels[Math.max(0, currentIndex)] || 'Processing'}</span>
-										</div>
-									</div>
-								</div>
-							</div>
+							{/if}
 						</div>
 					{/if}
+				</div>
+				<div class="panel-footer">
+					<span>└─────────────────────────────────────────────────────────────────────────────────┘</span>
+				</div>
+			</div>
 
-					<!-- Seed Review UI -->
-					{#if curationPhase === 'reviewing_seeds' && selectedSeeds.length > 0}
-						<div class="mb-4 bg-gradient-to-r from-purple-900/40 to-indigo-900/40 border border-purple-500/50 rounded-lg p-4">
-							<div class="flex items-center gap-2 mb-4">
-								<div class="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center">
-									<svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
-									</svg>
-								</div>
-								<div>
-									<h4 class="font-semibold text-white">Review Seed Tracks</h4>
-									<p class="text-xs text-gray-400">These anchor tracks will define your playlist's vibe. Click regenerate if any don't fit.</p>
-								</div>
+		{:else if activeTab === 'create'}
+			<!-- Create Tab -->
+			<div class="panel">
+				<div class="panel-header">
+					<span>┌─ CREATE STATION ──────────────────────────────────────────────────────────────┐</span>
+				</div>
+				<div class="panel-content create-form">
+					{#if createError}
+						<div class="error-box">{createError}</div>
+					{/if}
+
+					<form onsubmit={handleCreateStation}>
+						<label class="form-row">
+							<span class="form-label">NAME:</span>
+							<input type="text" bind:value={name} required class="form-input" placeholder="My Station" />
+						</label>
+						<label class="form-row">
+							<span class="form-label">PATH:</span>
+							<input type="text" bind:value={path} required pattern="[a-z0-9-]+" class="form-input" placeholder="my-station" />
+						</label>
+						<label class="form-row">
+							<span class="form-label">DESC:</span>
+							<textarea bind:value={description} required rows="2" class="form-input form-textarea" placeholder="Describe the vibe..."></textarea>
+						</label>
+
+						{#if aiAvailable && description.trim()}
+							<div class="form-row">
+								<button type="button" onclick={handleAnalyzeDescription} disabled={analyzingDescription} class="tui-btn ai">
+									{analyzingDescription ? '[ANALYZING...]' : '[AI: FIND TRACKS]'}
+								</button>
 							</div>
+						{/if}
 
-							<div class="space-y-2 mb-4">
+						{#if curationPhase === 'reviewing_seeds' && selectedSeeds.length > 0}
+							<div class="seeds-panel">
+								<div class="seeds-header">SEED TRACKS (click to regenerate)</div>
 								{#each selectedSeeds as seed, i}
-									<div class="flex items-center gap-3 bg-gray-800/50 rounded-lg p-3 border border-gray-700/50 hover:border-purple-500/30 transition-colors">
-										<div class="w-8 h-8 rounded-full bg-purple-600/30 flex items-center justify-center flex-shrink-0">
-											<span class="text-purple-300 font-bold text-sm">{i + 1}</span>
-										</div>
-										<div class="flex-1 min-w-0">
-											<div class="font-medium text-white truncate">{seed.title}</div>
-											<div class="text-sm text-gray-400 truncate">{seed.artist}</div>
-										</div>
-										<div class="text-xs text-gray-500 hidden sm:block truncate max-w-32">
-											{seed.album}
-										</div>
-										<button
-											type="button"
-											onclick={() => handleRegenerateSeed(i)}
-											disabled={regeneratingIndex !== null}
-											class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-all {regeneratingIndex === i ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white'} disabled:opacity-50"
-										>
-											{#if regeneratingIndex === i}
-												<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-													<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-													<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-												</svg>
-												<span>Finding...</span>
-											{:else}
-												<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-												</svg>
-												<span>Regenerate</span>
-											{/if}
+									<div class="seed-row">
+										<span class="seed-num">{i + 1}</span>
+										<span class="seed-info">{seed.artist} - {seed.title}</span>
+										<button type="button" class="seed-regen" onclick={() => handleRegenerateSeed(i)} disabled={regeneratingIndex !== null}>
+											{regeneratingIndex === i ? '...' : '↻'}
 										</button>
 									</div>
 								{/each}
-							</div>
-
-							<div class="flex items-center justify-between pt-3 border-t border-gray-700/50">
-								<p class="text-xs text-gray-400">
-									Happy with the seeds? Click continue to build the full playlist.
-								</p>
-								<button
-									type="button"
-									onclick={handleApproveSeedsAndFillGaps}
-									class="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-medium rounded-lg transition-all"
-								>
-									<span>Continue</span>
-									<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-									</svg>
+								<button type="button" class="tui-btn" onclick={handleApproveSeedsAndFillGaps}>
+									[APPROVE & BUILD PLAYLIST]
 								</button>
 							</div>
-						</div>
-					{/if}
-				{/if}
+						{/if}
 
-				{#if aiResult}
-					<div class="mb-4 bg-gradient-to-r from-purple-900/40 to-blue-900/40 border border-purple-500/50 rounded-lg p-4">
-						<div class="flex items-center justify-between mb-2">
-							<div class="flex items-center gap-2">
-								<svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-								</svg>
-								<span class="font-semibold text-green-400">
-									Found {aiResult.tracks_found} matching tracks in your library!
-								</span>
+						{#if curationProgress}
+							<div class="progress-box">
+								<span class="progress-label">{curationProgress.message}</span>
 							</div>
-							{#if aiResult.tracks.length > 5}
-								<button
-									type="button"
-									onclick={() => showFullPlaylist = !showFullPlaylist}
-									class="text-sm px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded"
-								>
-									{showFullPlaylist ? 'Show Less' : `View All ${aiResult.tracks.length} Tracks`}
-								</button>
-							{/if}
-						</div>
-						{#if aiResult.sample_tracks.length > 0}
-							<div class="mt-2">
-								<p class="text-sm text-gray-300 mb-1">
-									{showFullPlaylist ? 'All tracks:' : 'Sample tracks:'}
-								</p>
-								<div class="max-h-96 overflow-y-auto">
-									<ul class="text-sm text-gray-400 space-y-1">
-										{#each (showFullPlaylist ? aiResult.tracks : aiResult.tracks.slice(0, 5)) as track}
-											<li class="flex items-start gap-2">
-												<span class="text-purple-400">♪</span>
-												<span>{track.artist} - {track.title}</span>
-											</li>
-										{/each}
-									</ul>
+						{/if}
+
+						{#if aiResult}
+							<div class="result-box">
+								<span class="result-header">✓ Found {aiResult.tracks_found} tracks</span>
+								<div class="result-tracks-scroll">
+									{#each aiResult.tracks as track, ti}
+										<div class="result-track-row">
+											<span class="track-num">{(ti + 1).toString().padStart(3, '0')}</span>
+											<span class="track-artist">{track.artist}</span>
+											<span class="track-sep">-</span>
+											<span class="track-title">{track.title}</span>
+										</div>
+									{/each}
 								</div>
 							</div>
 						{/if}
-					</div>
-				{/if}
 
-				<div class="mb-6">
-					<label for="genres" class="block text-sm font-medium text-gray-300 mb-2">
-						Genres (comma separated)
-						{#if analyzingDescription}
-							<span class="text-xs text-purple-400 animate-pulse">AI is analyzing...</span>
-						{/if}
+						<label class="form-row">
+							<span class="form-label">GENRES:</span>
+							<input type="text" bind:value={genresInput} required class="form-input" placeholder="Rock, Electronic, Jazz" />
+						</label>
+
+						<div class="form-row">
+							<button type="submit" disabled={creating} class="tui-btn submit">
+								{creating ? '[CREATING...]' : '[CREATE STATION]'}
+							</button>
+						</div>
+					</form>
+				</div>
+				<div class="panel-footer">
+					<span>└─────────────────────────────────────────────────────────────────────────────────┘</span>
+				</div>
+			</div>
+		{:else if activeTab === 'settings'}
+			<!-- Settings Tab -->
+			<div class="panel">
+				<div class="panel-header">
+					<span>┌─ SETTINGS ───────────────────────────────────────────────────────────────────┐</span>
+				</div>
+				<div class="panel-content settings-content">
+					<label class="form-row">
+						<span class="form-label">SITE TITLE:</span>
+						<input
+							type="text"
+							bind:value={siteTitle}
+							class="form-input"
+							placeholder="NAVIDROME RADIO"
+						/>
 					</label>
-					<input
-						type="text"
-						id="genres"
-						bind:value={genresInput}
-						required
-						class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
-						placeholder="Rock, Alternative, Indie"
-					/>
-					<p class="text-xs text-gray-400 mt-1">
-						{aiAvailable
-							? 'AI can auto-fill this based on your description'
-							: 'Manually enter genres separated by commas'}
-					</p>
-				</div>
+					<p class="form-hint">This title appears in the header on the homepage.</p>
 
-				<button
-					type="submit"
-					disabled={creating}
-					class="bg-green-600 hover:bg-green-700 disabled:bg-green-800 text-white px-6 py-2 rounded-lg font-semibold"
-				>
-					{creating ? 'Creating...' : 'Create Station'}
-				</button>
-			</form>
-		</div>
-	{/if}
-
-	<!-- Stations List -->
-	{#if loading}
-		<div class="flex items-center justify-center py-12">
-			<div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-		</div>
-	{:else if stations.length === 0}
-		<div class="text-center text-gray-400 py-12">
-			<p>No stations yet. Create your first one!</p>
-		</div>
-	{:else}
-		<div class="space-y-4">
-			{#each stations as station}
-				<div class="bg-gray-800 rounded-lg p-6">
-					<div class="flex items-start justify-between">
-						<div class="flex-1">
-							<div class="flex items-center gap-3 mb-2">
-								<h3 class="text-xl font-bold">{station.name}</h3>
-								{#if station.active}
-									<span
-										class="px-2 py-1 bg-green-500 text-white text-xs font-semibold rounded-full flex items-center gap-1"
-									>
-										<span class="w-2 h-2 bg-white rounded-full animate-pulse"></span>
-										Live
-									</span>
-									<!-- Listener count -->
-									<span class="px-2 py-1 bg-blue-600 text-white text-xs font-semibold rounded-full flex items-center gap-1">
-										<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-											<path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
-										</svg>
-										{listenerCounts[station.id] || 0} {(listenerCounts[station.id] || 0) === 1 ? 'listener' : 'listeners'}
-									</span>
-								{:else}
-									<span class="px-2 py-1 bg-gray-600 text-gray-300 text-xs font-semibold rounded-full">
-										Offline
-									</span>
-								{/if}
-							</div>
-
-							<p class="text-sm text-gray-400 mb-3">{station.description}</p>
-
-							<div class="flex flex-wrap gap-2 mb-3">
-								{#each station.genres as genre}
-									<span class="px-2 py-1 bg-gray-700 text-gray-300 text-xs rounded">{genre}</span>
-								{/each}
-							</div>
-
-							<p class="text-xs text-gray-500">
-								Path: <code class="bg-gray-700 px-2 py-1 rounded">/station/{station.path}</code>
-							</p>
-						</div>
-
-						<div class="flex flex-col gap-2 ml-4">
-							{#if station.active}
-								<button
-									onclick={() => handleStopStation(station.id)}
-									class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm rounded-lg whitespace-nowrap"
-								>
-									Stop
-								</button>
-							{:else}
-								<button
-									onclick={() => handleStartStation(station.id)}
-									class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg whitespace-nowrap"
-								>
-									Start
-								</button>
-							{/if}
-
-							<a
-								href="/station/{station.path}"
-								class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg text-center whitespace-nowrap"
-							>
-								Listen
-							</a>
-
-							<button
-								onclick={() => toggleStationTracks(station.id)}
-								class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg whitespace-nowrap"
-							>
-								{expandedStationId === station.id ? 'Hide Tracks' : 'View Tracks'}
-							</button>
-
-							<button
-								onclick={() => handleCreatePlaylist(station.id, station.name)}
-								disabled={creatingPlaylist === station.id}
-								class="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-800 disabled:cursor-wait text-white text-sm rounded-lg whitespace-nowrap flex items-center gap-1"
-							>
-								{#if creatingPlaylist === station.id}
-									<svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-										<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-										<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-									</svg>
-									Creating...
-								{:else}
-									Export Playlist
-								{/if}
-							</button>
-
-							<button
-								onclick={() => handleDeleteStation(station.id)}
-								class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg whitespace-nowrap"
-							>
-								Delete
-							</button>
-						</div>
+					<div class="form-row">
+						<button
+							class="tui-btn submit"
+							onclick={saveSettings}
+							disabled={savingSettings}
+						>
+							{savingSettings ? '[SAVING...]' : '[SAVE SETTINGS]'}
+						</button>
 					</div>
 
-					<!-- Playlist creation success message -->
-					{#if playlistSuccess?.stationId === station.id}
-						<div class="mt-2 p-3 bg-teal-900/50 border border-teal-700 rounded-lg text-teal-300 text-sm flex items-center gap-2">
-							<svg class="w-5 h-5 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-							</svg>
-							Created playlist "{playlistSuccess.name}" with {playlistSuccess.trackCount} tracks in Navidrome
-						</div>
-					{/if}
-
-					<!-- Expandable Tracks Section -->
-					{#if expandedStationId === station.id}
-						<div class="mt-4 pt-4 border-t border-gray-700">
-							<h4 class="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
-								<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
-								</svg>
-								Station Playlist
-							</h4>
-
-							{#if loadingStationTracks === station.id}
-								<div class="flex items-center justify-center py-8">
-									<svg class="animate-spin h-6 w-6 text-purple-400" fill="none" viewBox="0 0 24 24">
-										<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-										<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-									</svg>
-									<span class="ml-2 text-gray-400">Loading tracks...</span>
-								</div>
-							{:else if stationTracks.get(station.id)?.length}
-								<div class="max-h-80 overflow-y-auto">
-									<table class="w-full text-sm">
-										<thead class="text-xs text-gray-500 uppercase border-b border-gray-700 sticky top-0 bg-gray-800">
-											<tr>
-												<th class="text-left py-2 px-2">#</th>
-												<th class="text-left py-2 px-2">Title</th>
-												<th class="text-left py-2 px-2">Artist</th>
-												<th class="text-left py-2 px-2">Album</th>
-											</tr>
-										</thead>
-										<tbody>
-											{#each stationTracks.get(station.id) || [] as track, i}
-												<tr class="border-b border-gray-700/50 hover:bg-gray-700/30">
-													<td class="py-2 px-2 text-gray-500">{i + 1}</td>
-													<td class="py-2 px-2 text-white font-medium truncate max-w-[200px]" title={track.title}>{track.title}</td>
-													<td class="py-2 px-2 text-gray-400 truncate max-w-[150px]" title={track.artist}>{track.artist}</td>
-													<td class="py-2 px-2 text-gray-500 truncate max-w-[150px]" title={track.album}>{track.album}</td>
-												</tr>
-											{/each}
-										</tbody>
-									</table>
-								</div>
-							{:else}
-								<div class="text-center py-8 text-gray-500">
-									<svg class="w-12 h-12 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
-									</svg>
-									<p>No tracks played yet</p>
-									<p class="text-xs mt-1">Start the station to begin playing tracks</p>
-								</div>
-							{/if}
+					{#if settingsMessage}
+						<div class="settings-message" class:success={settingsMessage === 'Settings saved!'}>
+							{settingsMessage}
 						</div>
 					{/if}
 				</div>
-			{/each}
-		</div>
-	{/if}
+				<div class="panel-footer">
+					<span>└─────────────────────────────────────────────────────────────────────────────────┘</span>
+				</div>
+			</div>
+		{/if}
+	</main>
+
+	<!-- Footer -->
+	<footer class="footer">
+		<span class="footer-border">├─</span>
+		<span class="help">1:stations  2:library  3:create  4:settings</span>
+		<span class="footer-border-end">─┤</span>
+	</footer>
 </div>
+
+<style>
+	:global(html), :global(body) {
+		margin: 0;
+		padding: 0;
+		height: 100%;
+		overflow: hidden;
+		background: #0a0a0a;
+		color: #e0e0e0;
+		font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+	}
+
+	.admin-container {
+		height: 100vh;
+		display: flex;
+		flex-direction: column;
+		padding: 0.5rem 1rem;
+		box-sizing: border-box;
+		overflow: hidden;
+	}
+
+	/* Header */
+	.header {
+		flex-shrink: 0;
+		text-align: center;
+		border-bottom: 1px solid #333;
+		padding-bottom: 0.5rem;
+	}
+
+	.header-content {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.75rem;
+	}
+
+	.header-border {
+		color: #333;
+	}
+
+	.title {
+		font-size: 1.25rem;
+		font-weight: bold;
+		color: #00ff88;
+		letter-spacing: 0.15em;
+		margin: 0;
+		text-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+	}
+
+	.header-sub {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 1rem;
+		margin-top: 0.25rem;
+		font-size: 0.75rem;
+	}
+
+	.sub-border {
+		color: #333;
+	}
+
+	.back-link {
+		color: #666;
+		text-decoration: none;
+		transition: color 0.15s;
+	}
+
+	.back-link:hover {
+		color: #00ff88;
+	}
+
+	.user-info {
+		color: #00ff88;
+	}
+
+	/* Tabs */
+	.tabs {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem 0;
+		flex-shrink: 0;
+		border-bottom: 1px solid #333;
+	}
+
+	.tab-border, .tab-border-end {
+		color: #333;
+	}
+
+	.tab-border-end {
+		flex: 1;
+		text-align: right;
+	}
+
+	.tab {
+		background: transparent;
+		border: none;
+		color: #555;
+		font-family: inherit;
+		font-size: 0.8rem;
+		cursor: pointer;
+		padding: 0.25rem 0.5rem;
+		transition: all 0.15s;
+	}
+
+	.tab:hover {
+		color: #888;
+	}
+
+	.tab.active {
+		color: #00ff88;
+		text-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+	}
+
+	.ai-badge {
+		color: #a855f7;
+		font-size: 0.7rem;
+	}
+
+	/* Main Content */
+	.main-content {
+		flex: 1;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	.loading {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.blink {
+		animation: blink 1s infinite;
+	}
+
+	@keyframes blink {
+		50% { opacity: 0.5; }
+	}
+
+	/* Panel */
+	.panel {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.panel-header, .panel-footer {
+		font-size: 0.7rem;
+		color: #444;
+		flex-shrink: 0;
+		white-space: nowrap;
+		overflow: hidden;
+	}
+
+	.panel-content {
+		flex: 1;
+		overflow-y: auto;
+		overflow-x: hidden;
+		border-left: 1px solid #333;
+		border-right: 1px solid #333;
+		padding: 0.5rem;
+		min-height: 0;
+	}
+
+	.panel-content::-webkit-scrollbar {
+		width: 4px;
+	}
+
+	.panel-content::-webkit-scrollbar-track {
+		background: #1a1a1a;
+	}
+
+	.panel-content::-webkit-scrollbar-thumb {
+		background: #333;
+	}
+
+	/* Stations Grid */
+	.stations-grid {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.station-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.4rem 0.5rem;
+		background: #111;
+		font-size: 0.8rem;
+		flex-wrap: wrap;
+	}
+
+	.station-row.expanded {
+		background: #1a1a1a;
+	}
+
+	.station-index {
+		color: #444;
+		width: 1.5rem;
+	}
+
+	.station-status {
+		color: #666;
+	}
+
+	.station-status.live {
+		color: #00ff88;
+	}
+
+	.station-name {
+		color: #fff;
+		flex: 1;
+		min-width: 120px;
+	}
+
+	.station-listeners {
+		color: #666;
+		font-size: 0.7rem;
+	}
+
+	.station-genres {
+		color: #555;
+		font-size: 0.7rem;
+		max-width: 150px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.station-actions {
+		display: flex;
+		gap: 0.25rem;
+	}
+
+	.action-btn {
+		background: transparent;
+		border: none;
+		color: #666;
+		font-family: inherit;
+		font-size: 0.7rem;
+		cursor: pointer;
+		padding: 0.15rem 0.25rem;
+		transition: color 0.15s;
+	}
+
+	.action-btn:hover {
+		color: #888;
+	}
+
+	.action-btn.start:hover {
+		color: #00ff88;
+	}
+
+	.action-btn.stop:hover {
+		color: #ff8800;
+	}
+
+	.action-btn.export:hover {
+		color: #00d4ff;
+	}
+
+	.action-btn.delete:hover {
+		color: #ff4444;
+	}
+
+	.action-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.success-msg {
+		width: 100%;
+		color: #00ff88;
+		font-size: 0.7rem;
+		padding: 0.25rem 0.5rem;
+	}
+
+	.tracks-panel {
+		width: 100%;
+		padding: 0.5rem;
+		background: #0a0a0a;
+		border-top: 1px dashed #333;
+		margin-top: 0.25rem;
+	}
+
+	.tracks-header {
+		font-size: 0.65rem;
+		color: #666;
+		padding-bottom: 0.25rem;
+		border-bottom: 1px dashed #222;
+		margin-bottom: 0.25rem;
+	}
+
+	.tracks-list-scroll {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+		max-height: 200px;
+		overflow-y: auto;
+		padding-right: 0.25rem;
+	}
+
+	.tracks-list-scroll::-webkit-scrollbar {
+		width: 4px;
+	}
+
+	.tracks-list-scroll::-webkit-scrollbar-track {
+		background: #111;
+	}
+
+	.tracks-list-scroll::-webkit-scrollbar-thumb {
+		background: #333;
+	}
+
+	.track-row {
+		display: flex;
+		gap: 0.5rem;
+		font-size: 0.7rem;
+		color: #888;
+	}
+
+	.track-num {
+		color: #444;
+		width: 2rem;
+		flex-shrink: 0;
+	}
+
+	.track-artist {
+		color: #00ff88;
+		max-width: 150px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
+
+	.track-sep {
+		color: #333;
+		flex-shrink: 0;
+	}
+
+	.track-title {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.empty-state, .empty {
+		color: #444;
+		text-align: center;
+		padding: 2rem;
+	}
+
+	/* Library Content */
+	.library-content {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+
+	.stats-row {
+		display: flex;
+		gap: 1rem;
+	}
+
+	.stat-box {
+		flex: 1;
+		background: #111;
+		padding: 0.75rem;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		border: 1px solid #222;
+	}
+
+	.stat-label {
+		font-size: 0.65rem;
+		color: #666;
+		margin-bottom: 0.25rem;
+	}
+
+	.stat-value {
+		font-size: 1.5rem;
+		color: #00ff88;
+		font-weight: bold;
+	}
+
+	.stat-value.processing {
+		animation: pulse 1s infinite;
+	}
+
+	@keyframes pulse {
+		50% { opacity: 0.7; }
+	}
+
+	.stat-value-sm {
+		font-size: 0.8rem;
+		color: #888;
+	}
+
+	.stat-sub {
+		font-size: 0.6rem;
+		color: #555;
+	}
+
+	.actions-row {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+
+	.tui-btn {
+		background: #1a1a1a;
+		border: 1px solid #333;
+		color: #888;
+		font-family: inherit;
+		font-size: 0.75rem;
+		cursor: pointer;
+		padding: 0.4rem 0.75rem;
+		transition: all 0.15s;
+	}
+
+	.tui-btn:hover:not(:disabled) {
+		background: #222;
+		color: #00ff88;
+		border-color: #00ff88;
+	}
+
+	.tui-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.tui-btn.ai {
+		color: #a855f7;
+		border-color: #a855f7;
+	}
+
+	.tui-btn.ai:hover:not(:disabled) {
+		background: #1a0a2a;
+		color: #c084fc;
+	}
+
+	.tui-btn.stop {
+		color: #ff4444;
+		border-color: #ff4444;
+	}
+
+	.tui-btn.stop:hover:not(:disabled) {
+		background: #2a0a0a;
+	}
+
+	.tui-btn.submit {
+		color: #00ff88;
+		border-color: #00ff88;
+	}
+
+	.progress-box {
+		background: #0a1a1a;
+		border: 1px solid #1a3a3a;
+		padding: 0.75rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.progress-box.embedding {
+		border-color: #2a1a3a;
+		background: #0a0a1a;
+	}
+
+	.progress-label {
+		font-size: 0.75rem;
+		color: #00d4ff;
+	}
+
+	.progress-bar {
+		height: 4px;
+		background: #222;
+		overflow: hidden;
+	}
+
+	.progress-fill {
+		height: 100%;
+		background: #00ff88;
+		transition: width 0.3s;
+	}
+
+	.progress-pct {
+		font-size: 0.65rem;
+		color: #666;
+		text-align: right;
+	}
+
+	.progress-stats {
+		font-size: 0.65rem;
+		color: #00ff88;
+	}
+
+	.current-tracks {
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+
+	.current-track {
+		font-size: 0.65rem;
+		color: #a855f7;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.error-box {
+		background: #2a0a0a;
+		border: 1px solid #ff4444;
+		color: #ff8888;
+		padding: 0.5rem;
+		font-size: 0.75rem;
+	}
+
+	/* Create Form */
+	.create-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.form-row {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.75rem;
+	}
+
+	.form-label {
+		width: 60px;
+		font-size: 0.75rem;
+		color: #666;
+		text-align: right;
+		padding-top: 0.4rem;
+		flex-shrink: 0;
+	}
+
+	.form-input {
+		flex: 1;
+		background: #111;
+		border: 1px solid #333;
+		color: #fff;
+		font-family: inherit;
+		font-size: 0.8rem;
+		padding: 0.4rem 0.5rem;
+		outline: none;
+		transition: border-color 0.15s;
+	}
+
+	.form-input:focus {
+		border-color: #00ff88;
+	}
+
+	.form-input::placeholder {
+		color: #444;
+	}
+
+	.form-textarea {
+		resize: none;
+	}
+
+	.seeds-panel {
+		background: #0a0a1a;
+		border: 1px solid #2a1a3a;
+		padding: 0.75rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	.seeds-header {
+		font-size: 0.7rem;
+		color: #a855f7;
+	}
+
+	.seed-row {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-size: 0.75rem;
+		padding: 0.25rem 0;
+	}
+
+	.seed-num {
+		color: #a855f7;
+		width: 1rem;
+	}
+
+	.seed-info {
+		flex: 1;
+		color: #ccc;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.seed-regen {
+		background: transparent;
+		border: none;
+		color: #666;
+		cursor: pointer;
+		font-size: 0.8rem;
+		padding: 0.1rem 0.25rem;
+	}
+
+	.seed-regen:hover:not(:disabled) {
+		color: #a855f7;
+	}
+
+	.result-box {
+		background: #0a1a0a;
+		border: 1px solid #1a3a1a;
+		padding: 0.75rem;
+	}
+
+	.result-header {
+		font-size: 0.8rem;
+		color: #00ff88;
+		display: block;
+		margin-bottom: 0.5rem;
+		padding-bottom: 0.25rem;
+		border-bottom: 1px dashed #1a3a1a;
+	}
+
+	.result-tracks-scroll {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+		max-height: 180px;
+		overflow-y: auto;
+		padding-right: 0.25rem;
+	}
+
+	.result-tracks-scroll::-webkit-scrollbar {
+		width: 4px;
+	}
+
+	.result-tracks-scroll::-webkit-scrollbar-track {
+		background: #0a1a0a;
+	}
+
+	.result-tracks-scroll::-webkit-scrollbar-thumb {
+		background: #1a3a1a;
+	}
+
+	.result-track-row {
+		display: flex;
+		gap: 0.5rem;
+		font-size: 0.7rem;
+		color: #888;
+	}
+
+	.result-track-row .track-num {
+		color: #1a5a1a;
+	}
+
+	.result-track-row .track-artist {
+		color: #00ff88;
+	}
+
+	/* Footer */
+	.footer {
+		display: flex;
+		align-items: center;
+		padding: 0.5rem 0;
+		border-top: 1px solid #333;
+		flex-shrink: 0;
+	}
+
+	.footer-border {
+		color: #333;
+	}
+
+	.footer-border-end {
+		flex: 1;
+		text-align: right;
+		color: #333;
+	}
+
+	.help {
+		color: #444;
+		font-size: 0.7rem;
+	}
+
+	/* Visualization Section */
+	.viz-section {
+		margin-top: 0.5rem;
+		border: 1px solid #222;
+		background: #0a0a0a;
+	}
+
+	.viz-toggle {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem 0.75rem;
+		background: #111;
+		border: none;
+		color: #888;
+		font-family: inherit;
+		font-size: 0.75rem;
+		cursor: pointer;
+		text-align: left;
+		transition: all 0.15s;
+	}
+
+	.viz-toggle:hover {
+		background: #1a1a1a;
+		color: #00ff88;
+	}
+
+	.viz-arrow {
+		color: #00ff88;
+		width: 1rem;
+	}
+
+	.viz-count {
+		color: #555;
+		font-size: 0.65rem;
+	}
+
+	.viz-container {
+		border-top: 1px solid #222;
+		padding: 0.5rem;
+	}
+
+	.viz-plot {
+		width: 100%;
+		height: 300px;
+		background: #0a0a0a;
+	}
+
+	.viz-loading {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 200px;
+		color: #666;
+	}
+
+	.viz-help {
+		text-align: center;
+		font-size: 0.6rem;
+		color: #444;
+		padding-top: 0.5rem;
+	}
+
+	/* Settings Tab */
+	.settings-content {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+		max-width: 500px;
+	}
+
+	.form-hint {
+		font-size: 0.7rem;
+		color: #555;
+		margin: 0;
+		padding-left: calc(60px + 0.75rem);
+	}
+
+	.settings-message {
+		font-size: 0.75rem;
+		padding: 0.5rem;
+		background: #2a0a0a;
+		border: 1px solid #ff4444;
+		color: #ff8888;
+	}
+
+	.settings-message.success {
+		background: #0a2a0a;
+		border-color: #00ff88;
+		color: #00ff88;
+	}
+</style>

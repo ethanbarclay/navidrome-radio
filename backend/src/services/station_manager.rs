@@ -1,5 +1,7 @@
+#![allow(dead_code)]
+
 use crate::error::{AppError, Result};
-use crate::models::{NowPlaying, Station, Track, TrackInfo};
+use crate::models::{NowPlaying, Station, Track};
 use crate::services::{CurationEngine, NavidromeClient};
 use chrono::{DateTime, Utc, Duration};
 use redis::aio::ConnectionManager;
