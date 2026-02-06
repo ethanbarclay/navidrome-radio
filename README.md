@@ -1,665 +1,328 @@
 # Navidrome Radio
 
-AI-powered radio station platform that transforms your Navidrome music library into synchronized streaming radio stations. Built with Rust and SvelteKit for maximum performance and a beautiful mobile-first experience.
+Turn your Navidrome music library into synchronized radio stations. All listeners hear the same track at the same time, like a real radio station.
 
-## ✨ Features
+Built with Rust and SvelteKit.
 
-- **📻 Multiple Radio Stations** - Create unlimited virtual radio stations from your music library
-- **🎵 Synchronized Playback** - All listeners hear the same track at the same time
-- **🤖 AI-Powered Curation** - Intelligent track selection based on station descriptions (optional)
-- **🧠 ML Audio Similarity** - Audio embeddings for finding sonically similar tracks (optional)
-- **🎯 Hybrid Curation** - LLM selects perfect seed songs, ML fills gaps with similar tracks
-- **📊 Embedding Visualization** - Interactive 3D visualization of your music library
-- **📱 Mobile-First Design** - Beautiful responsive UI with system media controls (Android/iOS/macOS)
-- **👑 Admin Controls** - Create, start, stop stations and skip tracks
-- **⚡ Real-time Updates** - Live listener counts and now playing information
-- **🔐 Secure Authentication** - JWT-based auth with Argon2 password hashing
-- **🎨 Modern UI** - Clean, dark theme with Tailwind CSS
+## Features
 
-## 🚀 Quick Start
+- **Multiple Radio Stations** - Create unlimited stations from your music library
+- **Synchronized Playback** - All listeners hear the same track at the same position
+- **AI-Powered Curation** - Claude selects tracks based on natural language descriptions (optional)
+- **Audio Similarity** - ML-based audio embeddings find sonically similar tracks (optional)
+- **Hybrid Curation** - LLM picks seed songs, ML fills gaps with similar tracks
+- **Mobile-First Design** - Responsive UI with system media controls and animated visualizer
+- **Admin Dashboard** - Create stations, manage library, view listener counts
+- **Custom Branding** - Set your own site title in settings
+- **Real-time Updates** - Live now playing info and listener counts
 
-### Development (Recommended)
+## Quick Start
 
-```bash
-# Clone the repository
-git clone <your-repo-url>
-cd navidrome-radio
+### Prerequisites
 
-# Start infrastructure (PostgreSQL, Redis, Navidrome)
-docker-compose up -d postgres redis navidrome
-
-# Build and run (one command!)
-./dev.sh run
-```
-
-Access at **http://localhost:8000**
-
-### Production (Docker)
-
-```bash
-# Start everything
-docker-compose up -d
-
-# Access the application
-open http://localhost:8000
-```
-
-## 📋 Prerequisites
-
-**For Development:**
 - Docker and Docker Compose
-- Rust 1.75+ (https://rustup.rs/)
-- Node.js 20+ (https://nodejs.org/)
+- A running Navidrome instance on your network
+- Navidrome admin credentials
 
-**For Production:**
-- Docker and Docker Compose only
-
-**Music Library:**
-- Navidrome server with your music collection
-
-## 🎯 First Steps
-
-### 1. Configure Environment
+### 1. Create Configuration
 
 ```bash
-cp .env.example .env
-```
+mkdir navidrome-radio && cd navidrome-radio
 
-Edit `.env`:
-```bash
-# Required
-NAVIDROME_URL=http://localhost:4533
-NAVIDROME_USER=your_username
-NAVIDROME_PASSWORD=your_password
-JWT_SECRET=change-this-to-random-secure-string
+cat > .env << 'EOF'
+# Required - Your Navidrome server
+NAVIDROME_URL=http://192.168.1.100:4533
+NAVIDROME_USER=admin
+NAVIDROME_PASSWORD=your-navidrome-password
 
-# Optional - for AI features
+# Required - Generate with: openssl rand -base64 32
+JWT_SECRET=your-secure-random-secret-at-least-32-chars
+
+# Optional - Enable AI track selection
 ANTHROPIC_API_KEY=sk-ant-...
+EOF
 ```
 
-### 2. Set Up Navidrome
+### 2. Create docker-compose.yml
 
-If you don't have Navidrome yet:
-1. Start it: `docker-compose up -d navidrome`
-2. Open http://localhost:4533
-3. Create admin account
-4. Add your music library path in Navidrome settings
-5. Wait for library scan to complete
+```yaml
+version: '3.9'
 
-### 3. Create Your First Station
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: navidrome_radio
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-1. Navigate to http://localhost:8000
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  navidrome-radio:
+    image: ethanbarclay/navidrome-radio:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/navidrome_radio
+      REDIS_URL: redis://redis:6379
+      NAVIDROME_URL: ${NAVIDROME_URL}
+      NAVIDROME_USER: ${NAVIDROME_USER}
+      NAVIDROME_PASSWORD: ${NAVIDROME_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+```
+
+### 3. Start
+
+```bash
+docker-compose up -d
+```
+
+### 4. Create Your First Station
+
+1. Open http://localhost:8000
 2. Register an account (first user becomes admin)
 3. Go to Admin Dashboard
-4. Click "Create New Station"
-5. Fill in:
-   - **Name**: "Chill Vibes"
-   - **Path**: "chill-vibes"
-   - **Description**: "Relaxing indie and acoustic music"
-   - **Genres**: "Indie Rock, Acoustic, Folk"
-6. Click "Start" to begin broadcasting
+4. Click "Sync Library" to import tracks from Navidrome
+5. Click "[3] CREATE" tab
+6. Enter station name, path, and description
+7. (Optional) Click "AI: FIND TRACKS" to let AI curate a playlist
+8. Click "Create Station" then "Start"
 
-### 4. Listen
+Listen at `http://localhost:8000/station/your-station-path`
 
-Navigate to `http://localhost:8000/station/chill-vibes` and click "Start Listening"!
+## Configuration
 
-## 🛠 Development
+### Environment Variables
 
-### Development Workflow
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NAVIDROME_URL` | Yes | Your Navidrome server URL |
+| `NAVIDROME_USER` | Yes | Navidrome username |
+| `NAVIDROME_PASSWORD` | Yes | Navidrome password |
+| `JWT_SECRET` | Yes | Random string, min 32 chars |
+| `ANTHROPIC_API_KEY` | No | Enables AI track curation |
+| `NAVIDROME_LIBRARY_PATH` | No | Path to music files for audio embeddings |
+| `CORS_ORIGINS` | No | Allowed origins (default: localhost) |
+| `SERVER_PORT` | No | Server port (default: 8000) |
+
+### Audio Embeddings (Optional)
+
+For ML-based audio similarity, Navidrome Radio needs access to your music files:
+
+```yaml
+navidrome-radio:
+  # ... other config ...
+  environment:
+    NAVIDROME_LIBRARY_PATH: /music
+  volumes:
+    - /path/to/your/music:/music:ro
+```
+
+After starting, go to Admin > Library and click "Generate Embeddings". The ONNX model (~160MB) downloads automatically on first use.
+
+### Reverse Proxy
+
+For production, put behind a reverse proxy with HTTPS. Example Caddy config:
+
+```
+radio.example.com {
+    reverse_proxy localhost:8000
+}
+```
+
+Set `CORS_ORIGINS=https://radio.example.com` in your .env file.
+
+## How It Works
+
+### Synchronized Playback
+
+1. Backend tracks current song and start time for each station
+2. Clients poll `/nowplaying` endpoint every 10 seconds
+3. Audio player syncs to the correct position
+4. When a track ends, backend auto-selects the next track
+
+### Track Selection Modes
+
+- **Manual** - Admin picks specific tracks when creating station
+- **Random** - Random tracks matching station genres
+- **AI Contextual** - Claude analyzes description and selects tracks (requires API key)
+- **Hybrid** - LLM picks 5-10 seed songs, ML finds similar tracks to fill gaps
+
+### Hybrid Curation Flow
+
+1. You describe the vibe: "relaxing acoustic music for a rainy day"
+2. LLM analyzes your library and picks perfect seed songs
+3. You can regenerate any seed you don't like
+4. ML audio encoder finds sonically similar tracks between seeds
+5. Result: a playlist that matches your description AND flows smoothly
+
+## Admin Features
+
+### Stations Tab
+- Start/stop broadcasting
+- View listener counts
+- See station track lists
+- Export to Navidrome playlist
+
+### Library Tab
+- Sync tracks from Navidrome
+- Generate audio embeddings
+- View embedding visualization (2D plot of your library by audio similarity)
+
+### Create Tab
+- Natural language station description
+- AI-assisted track curation with seed review
+- Genre tagging
+
+### Settings Tab
+- Custom site title (replaces "NAVIDROME RADIO" on homepage)
+
+## API Reference
+
+### Authentication
+- `POST /api/v1/auth/register` - Create account
+- `POST /api/v1/auth/login` - Get JWT token
+- `GET /api/v1/auth/me` - Current user info
+
+### Stations
+- `GET /api/v1/stations` - List stations
+- `POST /api/v1/stations` - Create station (admin)
+- `GET /api/v1/stations/:id/nowplaying` - Now playing info
+- `POST /api/v1/stations/:id/start` - Start broadcast (admin)
+- `POST /api/v1/stations/:id/stop` - Stop broadcast (admin)
+- `POST /api/v1/stations/:id/skip` - Skip track (admin)
+
+### Settings
+- `GET /api/v1/settings` - Get app settings
+- `PUT /api/v1/settings` - Update settings (admin)
+
+### Streaming
+- `GET /api/v1/navidrome/stream/:track_id` - Audio stream (proxied)
+- `GET /api/v1/navidrome/cover/:track_id` - Album art (proxied)
+
+## Development
+
+### Prerequisites
+
+- Rust 1.75+
+- Node.js 20+
+- Docker (for PostgreSQL and Redis)
+
+### Setup
 
 ```bash
-# First time setup or complete rebuild
-./dev.sh rebuild
+git clone https://github.com/ethanbarclay/navidrome-radio.git
+cd navidrome-radio
 
-# Run the application
+# Start infrastructure
+docker-compose up -d postgres redis
+
+# Copy and edit environment
+cp .env.example .env
+
+# Build and run
 ./dev.sh run
-
-# Just rebuild (incremental)
-./dev.sh build
-
-# Clean build artifacts
-./dev.sh clean
 ```
-
-### What happens when you run?
-
-1. **`./dev.sh run`** starts:
-   - PostgreSQL (port 5432)
-   - Redis (port 6379)
-   - Navidrome (port 4533)
-   - Navidrome Radio (port 8000)
-
-2. Access the app at: **http://localhost:8000**
-
-### Scripts Reference
-
-#### `./dev.sh` - Main development tool
-All-in-one script for local development.
-
-**Commands:**
-- `./dev.sh run` - Start the application (default)
-- `./dev.sh build` - Build frontend + backend
-- `./dev.sh clean` - Clean all build artifacts
-- `./dev.sh rebuild` - Full clean rebuild
-
-**What it does:**
-- Builds frontend with npm
-- Builds backend with cargo (embeds frontend)
-- Manages Docker services
-- Runs the application locally
-
-#### `./docker-build.sh` - Build production image
-Builds and pushes multi-architecture Docker image to Docker Hub.
-
-```bash
-./docker-build.sh
-```
-
-**What it does:**
-- Builds for linux/amd64 and linux/arm64
-- Pushes to `ethanbarclay/navidrome-radio:latest`
-- Requires Docker buildx
-
-### What Gets Built
-
-- **Frontend**: SvelteKit app compiled to static files
-- **Backend**: Rust binary with embedded frontend (single binary deployment!)
 
 ### Project Structure
 
 ```
 navidrome-radio/
-├── frontend/          # SvelteKit frontend
+├── frontend/           # SvelteKit app
 │   ├── src/
-│   │   ├── routes/      # Pages
-│   │   └── lib/         # Components
-│   └── build/        # Built static files (embedded in backend)
-├── backend/          # Rust backend
+│   │   ├── routes/     # Pages (/, /admin, /station/[path])
+│   │   └── lib/        # Components, API client, stores
+│   └── build/          # Static output (embedded in backend)
+├── backend/            # Rust server
 │   ├── src/
-│   │   ├── api/         # HTTP endpoints
-│   │   ├── services/    # Business logic
-│   │   └── models/      # Data models
-│   └── migrations/      # Database schemas
-├── scripts/          # Development scripts
-│   ├── analysis/        # Embedding analysis tools
-│   └── model/           # ONNX export scripts
-├── docs/             # Documentation
-├── docker-compose.yml   # Full stack deployment
-├── Dockerfile        # Unified image (frontend + backend)
-├── dev.sh           # Development tool
-└── docker-build.sh  # Production Docker build
+│   │   ├── api/        # HTTP endpoints
+│   │   ├── services/   # Business logic
+│   │   └── models/     # Data types
+│   └── migrations/     # PostgreSQL schemas
+├── docker-compose.yml
+├── Dockerfile
+└── dev.sh              # Development helper
 ```
 
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────┐
-│   Frontend (SvelteKit)          │
-│   - Station List                │
-│   - Player UI                   │
-│   - Admin Dashboard             │
-│   - Media Session API           │
-└────────────┬────────────────────┘
-             │ HTTP/REST
-┌────────────▼────────────────────┐
-│   Backend (Rust + Axum)         │
-│   - JWT Auth                    │
-│   - Station Manager             │
-│   - Track Curation              │
-│   - Streaming Proxy             │
-└──┬────────┬────────┬────────────┘
-   │        │        │
-   │        │        └─────────┐
-   │        │                  │
-┌──▼────┐ ┌▼─────┐  ┌─────────▼───┐
-│ Postgre│ │ Redis│  │  Navidrome  │
-│   SQL  │ │      │  │   (Music)   │
-└────────┘ └──────┘  └─────────────┘
-```
-
-## 🎨 Tech Stack
-
-**Frontend:**
-- SvelteKit 5 (Svelte Runes)
-- TypeScript
-- Tailwind CSS 4
-- Media Session API
-- Plotly.js for embedding visualization
-- UMAP for dimensionality reduction
-
-**Backend:**
-- Rust with Axum framework
-- SQLx for PostgreSQL
-- Redis for caching
-- JWT authentication
-- Single binary with embedded frontend
-- ONNX Runtime for ML inference (audio encoder)
-- Symphonia for audio decoding
-
-**Infrastructure:**
-- PostgreSQL 16 with pgvector extension
-- Redis 7
-- Docker & Docker Compose
-
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `DATABASE_URL` | PostgreSQL connection | `postgresql://...` | Yes |
-| `REDIS_URL` | Redis connection | `redis://localhost:6379` | Yes |
-| `NAVIDROME_URL` | Navidrome server URL | - | Yes |
-| `NAVIDROME_USER` | Navidrome username | - | Yes |
-| `NAVIDROME_PASSWORD` | Navidrome password | - | Yes |
-| `JWT_SECRET` | JWT signing secret | - | Yes |
-| `ANTHROPIC_API_KEY` | Claude API (optional) | - | No |
-| `NAVIDROME_LIBRARY_PATH` | Path to music files for audio analysis | - | No |
-| `AUDIO_ENCODER_MODEL_PATH` | Path to ONNX model (auto-downloads if not set) | - | No |
-| `SERVER_HOST` | Bind address | `0.0.0.0` | No |
-| `SERVER_PORT` | Server port | `8000` | No |
-| `RUST_LOG` | Log level | `info` | No |
-
-### Station Configuration
-
-When creating a station, you can configure:
-
-- **Genres**: Comma-separated list (e.g., "Rock, Alternative, Indie")
-- **Description**: Rich description for AI curation
-- **Track Selection**:
-  - `random`: Random from genres (default, no API key needed)
-  - `ai_contextual`: AI-powered based on description (requires API key)
-  - `ai_embeddings`: Similarity-based (requires API key)
-  - `hybrid`: Mix of AI and random
-
-### ML Audio Features (Optional)
-
-Navidrome Radio supports ML-powered audio similarity for creating sonically coherent playlists. This requires:
-
-1. **Access to Music Files** - Direct filesystem access to your Navidrome music library
-2. **pgvector Extension** - PostgreSQL extension for vector similarity search (included in docker-compose)
-
-The ONNX audio encoder model (~160MB) is **automatically downloaded** from GitHub Releases on first startup if not present locally.
-
-#### How Hybrid Curation Works
-
-1. **Seed Selection**: LLM analyzes your query (e.g., "relaxing acoustic music") and selects 5-10 perfect seed songs from your library
-2. **Genre Awareness**: LLM automatically determines relevant genres (Jazz, Ambient, Folk) instead of just using keywords
-3. **Gap Filling**: Audio encoder finds sonically similar tracks to place between seeds
-4. **Result**: A playlist that matches your query AND flows smoothly from track to track
-
-#### Setting Up Audio Embeddings
+### Build Commands
 
 ```bash
-# 1. Set environment variable for music file access
-export NAVIDROME_LIBRARY_PATH=/path/to/your/music
-
-# 2. Use pgvector-enabled PostgreSQL (already in docker-compose.yml)
-# Image: pgvector/pgvector:pg16
-
-# 3. Start the application - model downloads automatically on first run
-./dev.sh run
-
-# 4. In Admin Dashboard, click "Sync Library" then "Generate Audio Embeddings"
-# This analyzes your music files and stores embeddings for similarity search
+./dev.sh run      # Build and run locally
+./dev.sh build    # Build only
+./dev.sh rebuild  # Clean rebuild
+./dev.sh clean    # Remove build artifacts
 ```
 
-#### Embedding Visualization
+## Tech Stack
 
-The Admin Dashboard includes an interactive 3D visualization of your music library based on audio embeddings. Tracks that sound similar appear closer together, letting you explore your library's sonic landscape.
+**Frontend:** SvelteKit 5, TypeScript, Tailwind CSS 4, Three.js (visualizer), Plotly.js (embeddings)
 
-#### Development Scripts
+**Backend:** Rust, Axum, SQLx, ONNX Runtime (audio ML)
 
-See [docs/scripts.md](docs/scripts.md) for Python scripts to analyze embeddings and export models.
+**Infrastructure:** PostgreSQL 16 + pgvector, Redis 7
 
-## 📡 API Reference
-
-### Authentication
-- `POST /api/v1/auth/register` - Register new user
-- `POST /api/v1/auth/login` - Login
-- `GET /api/v1/auth/me` - Get current user
-
-### Stations
-- `GET /api/v1/stations` - List all stations
-- `POST /api/v1/stations` - Create station (admin)
-- `GET /api/v1/stations/:id` - Get station details
-- `PATCH /api/v1/stations/:id` - Update station (admin)
-- `DELETE /api/v1/stations/:id` - Delete station (admin)
-- `POST /api/v1/stations/:id/start` - Start broadcasting (admin)
-- `POST /api/v1/stations/:id/stop` - Stop broadcasting (admin)
-- `POST /api/v1/stations/:id/skip` - Skip current track (admin)
-- `GET /api/v1/stations/:id/nowplaying` - Get now playing info
-
-### Streaming
-- `GET /api/v1/navidrome/stream/:track_id` - Stream audio
-- `GET /api/v1/navidrome/cover/:track_id` - Get album art
-
-## 🐳 Docker Deployment
-
-### Quick Deploy
-
-```bash
-# Build production image
-./docker-build.sh
-
-# Or use docker-compose
-docker-compose up -d
-```
-
-### Manual Docker Run
-
-```bash
-docker run -p 8000:8000 \
-  -e DATABASE_URL=postgresql://... \
-  -e REDIS_URL=redis://... \
-  -e NAVIDROME_URL=http://... \
-  -e NAVIDROME_USER=admin \
-  -e NAVIDROME_PASSWORD=password \
-  -e JWT_SECRET=your-secret \
-  ethanbarclay/navidrome-radio:latest
-```
-
-## 🔒 Production Checklist
-
-Before deploying to production:
-
-- [ ] Change `JWT_SECRET` to a strong random value (use `openssl rand -base64 32`)
-- [ ] Use strong database passwords
-- [ ] Set up HTTPS with reverse proxy (Caddy, nginx, Traefik)
-- [ ] Configure firewall rules
-- [ ] Set up backups for PostgreSQL
-- [ ] Configure Redis maxmemory policy
-- [ ] Set up monitoring and logging
-- [ ] Review and restrict CORS settings if needed
-
-## 🐛 Troubleshooting
-
-### Backend won't start
-```bash
-# Check if services are running
-docker-compose ps
-
-# Check logs
-docker-compose logs backend
-
-# Verify environment variables
-cat .env
-
-# Check port availability
-lsof -i :8000
-```
+## Troubleshooting
 
 ### No audio plays
-```bash
-# Check Navidrome connection
-curl http://localhost:4533/ping
+- Check Navidrome is accessible from Docker network
+- Verify NAVIDROME_URL, USER, PASSWORD in .env
+- Ensure Navidrome has finished scanning your library
 
-# Verify credentials in .env
-# Ensure Navidrome has scanned your music library
-# Check that genres match your library
-```
+### Station won't start
+- Sync library first (Admin > Library > Sync Library)
+- Check station has matching genres or AI-curated tracks
 
-### Frontend shows old code after rebuild
-The backend embeds the frontend at build time. After frontend changes:
+### AI features not working
+- Verify ANTHROPIC_API_KEY is set
+- Check logs: `docker-compose logs navidrome-radio`
 
-```bash
-# Full clean rebuild
-./dev.sh rebuild
+### Embeddings fail to generate
+- Mount music library with NAVIDROME_LIBRARY_PATH
+- Ensure read access to music files
+- Check disk space for ONNX model (~160MB)
 
-# Hard refresh in browser
-# macOS: Cmd + Shift + R
-# Windows/Linux: Ctrl + Shift + R
-```
+### Frontend shows stale content
+- The backend embeds frontend at build time
+- Rebuild: `./dev.sh rebuild`
+- Hard refresh browser: Cmd+Shift+R / Ctrl+Shift+R
 
-### Media controls don't show album art
-```bash
-# Check browser console for errors
-# Verify cover URL returns 200:
-curl -I http://localhost:8000/api/v1/navidrome/cover/TRACK_ID
+## License
 
-# Try hard refresh in browser
-```
+MIT License
 
-### Port already in use
-```bash
-# Kill any running backend
-pkill -f "navidrome-radio"
+## Acknowledgments
 
-# Or restart everything
-./dev.sh rebuild
-```
-
-### Database/Redis issues
-```bash
-# Restart Docker services
-docker-compose restart postgres redis navidrome
-
-# Or rebuild from scratch
-docker-compose down -v
-./dev.sh run
-```
-
-## 🗺️ Roadmap
-
-- [ ] WebSocket support for real-time updates
-- [ ] Playlist history and analytics
-- [ ] User favorites and recommendations
-- [ ] Scheduled programming
-- [ ] Social features (chat, reactions)
-- [ ] HLS streaming with live transcoding
-- [ ] Mobile apps (React Native)
-- [ ] Multi-server federation
-
-## 🤝 Contributing
-
-Contributions are welcome!
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🙏 Acknowledgments
-
-- [Navidrome](https://www.navidrome.org/) - The amazing open-source music server
-- [Axum](https://github.com/tokio-rs/axum) - Fast and ergonomic Rust web framework
-- [SvelteKit](https://kit.svelte.dev/) - The fastest way to build web apps
-- [Tailwind CSS](https://tailwindcss.com/) - Utility-first CSS framework
-
-## 📐 Technical Specification
-
-### System Architecture
-
-Navidrome Radio is a distributed radio station platform with the following components:
-
-**Core Services:**
-- **Backend (Rust)**: Axum-based HTTP server with JWT authentication
-- **Database (PostgreSQL)**: Persistent storage for users, stations, and metadata
-- **Cache (Redis)**: Session management and track selection caching
-- **Music Source (Navidrome)**: Subsonic API-compatible music server
-
-### How It Works
-
-#### Station Broadcasting
-
-1. **Station Creation** (Admin):
-   - Define station metadata (name, description, genres)
-   - Select track selection mode (random, AI-contextual, AI-embeddings, hybrid)
-   - Station stored in PostgreSQL
-
-2. **Track Selection**:
-   - **Random Mode**: Queries Navidrome for tracks matching genre filters
-   - **AI Mode**: Uses Claude API to analyze track metadata and select contextually appropriate tracks
-   - **Hybrid Mode**: Mixes AI-selected and random tracks
-   - Selected tracks cached in Redis for performance
-
-3. **Synchronized Playback**:
-   - Backend tracks current track and start time for each station
-   - All clients query `/nowplaying` endpoint (polling every 10s)
-   - Clients calculate elapsed time and sync audio position
-   - When track ends, backend automatically selects next track
-
-4. **Audio Streaming**:
-   - Backend acts as proxy to Navidrome's Subsonic API
-   - Clients request audio via `/stream/:track_id`
-   - Backend authenticates with Navidrome and forwards stream
-   - Album art served via `/cover/:track_id`
-
-#### Authentication Flow
-
-1. User registers via `/api/v1/auth/register`
-2. Password hashed with Argon2
-3. Login returns JWT token with user ID and role
-4. Subsequent requests include `Authorization: Bearer <token>`
-5. Middleware validates JWT and extracts user info
-6. Admin-only endpoints check `role = "admin"`
-
-#### Frontend Architecture
-
-**Pages:**
-- `/` - Station list with live listener counts
-- `/station/:path` - Station player with now playing info
-- `/admin` - Admin dashboard for station management
-
-**Key Features:**
-- Media Session API integration (Android/iOS/macOS controls)
-- Automatic position synchronization
-- Graceful handling of browser autoplay policies
-- Responsive mobile-first design
-
-### Data Models
-
-**User:**
-```rust
-struct User {
-    id: Uuid,
-    username: String,
-    password_hash: String, // Argon2
-    role: String,          // "user" or "admin"
-    created_at: DateTime,
-}
-```
-
-**Station:**
-```rust
-struct Station {
-    id: Uuid,
-    name: String,
-    path: String,          // URL slug
-    description: String,
-    genres: Vec<String>,
-    is_active: bool,
-    selection_mode: String, // "random", "ai_contextual", etc.
-    current_track_id: Option<String>,
-    started_at: Option<DateTime>,
-    created_at: DateTime,
-}
-```
-
-**Track (from Navidrome):**
-```typescript
-interface Track {
-    id: string;
-    title: string;
-    artist: string;
-    album: string;
-    duration: number; // seconds
-    genre?: string;
-}
-```
-
-### API Endpoints
-
-**Authentication:**
-- `POST /api/v1/auth/register` - Create account
-- `POST /api/v1/auth/login` - Get JWT token
-- `GET /api/v1/auth/me` - Get current user
-
-**Stations:**
-- `GET /api/v1/stations` - List all stations
-- `POST /api/v1/stations` - Create station (admin)
-- `GET /api/v1/stations/:id` - Get station details
-- `PATCH /api/v1/stations/:id` - Update station (admin)
-- `DELETE /api/v1/stations/:id` - Delete station (admin)
-- `POST /api/v1/stations/:id/start` - Start broadcasting (admin)
-- `POST /api/v1/stations/:id/stop` - Stop broadcasting (admin)
-- `POST /api/v1/stations/:id/skip` - Skip current track (admin)
-- `GET /api/v1/stations/:id/nowplaying` - Get now playing info
-
-**Streaming:**
-- `GET /api/v1/navidrome/stream/:track_id` - Stream audio (proxied to Navidrome)
-- `GET /api/v1/navidrome/cover/:track_id` - Get album art (proxied to Navidrome)
-
-### Security Considerations
-
-**Authentication:**
-- Passwords hashed with Argon2 (memory-hard, resistant to GPU attacks)
-- JWTs signed with HS256 and configurable secret
-- Tokens expire after 7 days
-- No refresh token mechanism (re-login required)
-
-**Authorization:**
-- Role-based access control (user vs admin)
-- Admin-only endpoints protected by middleware
-- Station control limited to admin users
-
-**Navidrome Integration:**
-- Credentials stored in environment variables
-- Authentication with Navidrome on backend only
-- Client never sees Navidrome credentials
-- All music streaming proxied through backend
-
-**CORS:**
-- Currently allows all origins in development
-- Should be restricted in production
-
-### Performance Optimizations
-
-**Caching:**
-- Track selection results cached in Redis
-- Album art URLs cached
-- Now playing info cached with TTL
-
-**Database:**
-- Indexed on frequently queried fields (station.path, user.username)
-- Connection pooling via SQLx
-- Prepared statements for all queries
-
-**Frontend:**
-- Static files pre-compressed (gzip/brotli)
-- Embedded in binary (no separate file server needed)
-- Media Session API reduces polling need
-
-### Deployment
-
-**Single Binary:**
-- Frontend built to static files
-- Embedded in Rust binary using `include_dir!` macro
-- No separate web server needed
-- Simplified deployment (just copy binary)
-
-**Docker:**
-- Multi-stage build (Node for frontend, Rust for backend)
-- Multi-architecture support (amd64, arm64)
-- Minimal runtime image based on Debian slim
-
-**Dependencies:**
-- PostgreSQL 16+ (persistent data)
-- Redis 7+ (caching)
-- Navidrome (music library)
-
-## 💬 Support
-
-Need help?
-- Open an issue on GitHub
-- Check the troubleshooting section above
-
----
-
-**Built with ❤️ using Rust and Svelte**
-
+- [Navidrome](https://www.navidrome.org/) - Open-source music server
+- [Axum](https://github.com/tokio-rs/axum) - Rust web framework
+- [SvelteKit](https://kit.svelte.dev/) - Frontend framework
