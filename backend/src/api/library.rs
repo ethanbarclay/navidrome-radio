@@ -142,6 +142,7 @@ struct RegenerateSeedResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct FillGapsRequest {
     query: String,
     seed_ids: Vec<String>,
@@ -706,6 +707,7 @@ async fn index_embeddings(
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
 struct IndexEmbeddingsStreamQuery {
     token: Option<String>,
     batch_size: Option<usize>,
@@ -848,7 +850,7 @@ async fn index_embeddings_stream(
                 let embedding_control_inner = embedding_control.clone();
                 let should_stop_inner = should_stop.clone();
 
-                let results: Vec<_> = stream::iter(tracks.into_iter())
+                let _results: Vec<_> = stream::iter(tracks.into_iter())
                     .map(|(track_id, relative_path, title, artist)| {
                         let encoder = encoder.clone();
                         let library_path = library_path.clone();

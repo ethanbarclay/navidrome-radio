@@ -3,7 +3,9 @@
 //! Encodes PCM audio from the pipeline and broadcasts via HLS (HTTP Live Streaming).
 //! Creates MP3 segments and generates m3u8 playlists for clients.
 
-use crate::error::{AppError, Result};
+#![allow(dead_code)]
+
+use crate::error::Result;
 use crate::services::audio_pipeline::{AudioPipeline, PipelineEvent, OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE};
 use mp3lame_encoder::{Builder, InterleavedPcm};
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -11,7 +13,7 @@ use std::collections::VecDeque;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock, mpsc};
+use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info, warn};
 
 /// Message sent to the encoder thread

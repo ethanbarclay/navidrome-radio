@@ -9,6 +9,8 @@
 //! 3. Audio encoder fills gaps with sonically similar tracks
 //! 4. Result: Playlist that matches query AND flows smoothly
 
+#![allow(dead_code)]
+
 use crate::error::{AppError, Result};
 use crate::services::audio_encoder::AudioEncoder;
 use crate::services::seed_selector::{SeedSelector, VerifiedSeed};

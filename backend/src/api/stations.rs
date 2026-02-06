@@ -1,8 +1,8 @@
-use crate::api::middleware::{RequireAdmin, RequireAuth};
+use crate::api::middleware::RequireAdmin;
 use crate::error::{AppError, Result};
 use crate::models::{CreateStationRequest, CurationProgress, NowPlaying, Station, UpdateStationRequest};
 use crate::services::{
-    audio_broadcaster::{AudioBroadcaster, AudioBroadcasterConfig, VisualizationData},
+    audio_broadcaster::{AudioBroadcaster, AudioBroadcasterConfig},
     audio_encoder::AudioEncoder,
     audio_pipeline::{AudioPipeline, AudioPipelineConfig, QueuedTrack},
     hybrid_curator::HybridCurator,
@@ -736,6 +736,7 @@ async fn curate_tracks_sse(
 // ============================================================================
 
 /// Stored broadcaster with its pipeline for control
+#[allow(dead_code)]
 pub struct StationBroadcaster {
     pub pipeline: Arc<RwLock<AudioPipeline>>,
     pub broadcaster: Arc<AudioBroadcaster>,

@@ -7,6 +7,8 @@
 //! Input: Mel spectrogram (5 second windows)
 //! Output: 100-dimensional embedding vector
 
+#![allow(dead_code)]
+
 use crate::error::{AppError, Result};
 use ndarray::{Array2, Array4, Axis};
 use ort::execution_providers::CoreMLExecutionProvider;
@@ -1189,7 +1191,7 @@ impl AudioEncoder {
     /// Power iteration to find top 2 principal components
     /// More efficient than full SVD for our use case
     fn power_iteration_pca(centered: &[Vec<f32>], n_features: usize) -> (Vec<f32>, Vec<f32>) {
-        let n_samples = centered.len();
+        let _n_samples = centered.len();
 
         // Initialize PC1 with a fixed seed for consistency
         let mut pc1: Vec<f32> = (0..n_features).map(|i| ((i * 7 + 11) % 100) as f32 / 100.0).collect();

@@ -1,10 +1,9 @@
 use crate::error::{AppError, Result};
 use crate::models::{
-    CurationProgress, LibraryStats, LibraryTrack, QueryAnalysisRequest, QueryAnalysisResult,
-    QueryFilters, TrackSelectionRequest, TrackSelectionResult,
+    CurationProgress, LibraryStats, LibraryTrack, QueryAnalysisResult,
+    QueryFilters, TrackSelectionResult,
 };
 use sqlx::PgPool;
-use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -310,7 +309,6 @@ Respond with ONLY a JSON object:
         limit: usize,
     ) -> Result<Vec<LibraryTrack>> {
         let mut query_parts = vec!["SELECT * FROM library_index WHERE 1=1".to_string()];
-        let mut bind_index = 1;
 
         // Build dynamic SQL query based on filters
         if let Some(genres) = &filters.genres {

@@ -6,6 +6,8 @@
 //! 3. Manages continuous playback buffer with track transitions
 //! 4. Provides samples for encoding/broadcasting
 
+#![allow(dead_code)]
+
 use crate::error::{AppError, Result};
 use crate::services::NavidromeClient;
 use bytes::Bytes;

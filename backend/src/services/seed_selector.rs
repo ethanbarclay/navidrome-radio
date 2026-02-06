@@ -10,6 +10,8 @@
 //! 3. If not found, ask LLM to pick from a sample of actual library tracks
 //! 4. Return verified seeds with their positions in the final playlist
 
+#![allow(dead_code)]
+
 use crate::error::{AppError, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};

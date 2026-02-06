@@ -99,6 +99,7 @@ pub struct LibrarySyncStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[allow(dead_code)]
 pub struct ExternalMetadata {
     pub id: i32,
     pub track_id: String,
@@ -115,6 +116,7 @@ pub struct ExternalMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[allow(dead_code)]
 pub struct UserTrackRating {
     pub id: i32,
     pub user_id: Uuid,
@@ -125,6 +127,7 @@ pub struct UserTrackRating {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[allow(dead_code)]
 pub struct AiQueryCache {
     pub id: i32,
     pub query_hash: String,
@@ -162,6 +165,7 @@ pub struct TrackAnalysisResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct QueryAnalysisRequest {
     pub query: String,
     pub library_context: LibraryStats,
@@ -189,6 +193,7 @@ pub struct QueryFilters {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TrackSelectionRequest {
     pub filters: QueryFilters,
     pub library_tracks: Vec<LibraryTrack>,
