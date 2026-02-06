@@ -110,6 +110,26 @@ export class ThreeScene {
 		const height = rect.height;
 
 		this.camera.aspect = width / height;
+
+		// Adjust camera for portrait/narrow views (mobile)
+		// Move camera back to fit all animals when aspect ratio is narrow
+		if (this.camera.aspect < 1.0) {
+			// Portrait: move camera way back
+			this.baseCameraZ = 28;
+			this.camera.position.set(0, 1.5, this.baseCameraZ);
+			this.camera.lookAt(0, 0, 0);
+		} else if (this.camera.aspect < 1.4) {
+			// Near-square: move camera back moderately
+			this.baseCameraZ = 16;
+			this.camera.position.set(0, 2, this.baseCameraZ);
+			this.camera.lookAt(0, 0.5, 0);
+		} else {
+			// Landscape: normal position
+			this.baseCameraZ = 8;
+			this.camera.position.set(0, 1.5, this.baseCameraZ);
+			this.camera.lookAt(0, 0.5, 0);
+		}
+
 		this.camera.updateProjectionMatrix();
 		this.renderer.setSize(width, height);
 
@@ -275,12 +295,15 @@ export class ThreeScene {
 		}
 	}
 
+	// Base camera Z position (adjusted on resize for mobile)
+	private baseCameraZ = 8;
+
 	/**
 	 * Subtle camera movement based on audio
 	 */
 	private updateCamera(bands: AudioBands, beat: BeatState): void {
 		// Subtle zoom on bass
-		const targetZ = 8 - bands.bass * 0.8;
+		const targetZ = this.baseCameraZ - bands.bass * 0.8;
 		this.camera.position.z += (targetZ - this.camera.position.z) * 0.05;
 
 		// Subtle sway on beat

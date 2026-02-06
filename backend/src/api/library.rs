@@ -5,6 +5,7 @@ use crate::models::{EmbeddingProgress, LibraryStats, LibrarySyncStatus, SyncProg
 use crate::services::hybrid_curator::HybridCurationProgress;
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     response::sse::{Event, Sse},
     routing::{get, post},
     Json, Router,
@@ -704,9 +705,9 @@ async fn index_embeddings(
     }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct IndexEmbeddingsStreamQuery {
-    token: String,
+    token: Option<String>,
     batch_size: Option<usize>,
     max_tracks: Option<usize>,
 }
@@ -722,11 +723,23 @@ struct HybridCurateStreamQuery {
 /// Stream audio embedding indexing progress via Server-Sent Events
 async fn index_embeddings_stream(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<IndexEmbeddingsStreamQuery>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    // Extract token from Authorization header or query param
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.to_string())
+        .or(params.token);
+
     // Validate token
     let auth_service = &state.auth_service;
-    let token_valid = auth_service.validate_admin_token(&params.token).await.is_ok();
+    let token_valid = match &token {
+        Some(t) => auth_service.validate_admin_token(t).await.is_ok(),
+        None => false,
+    };
 
     // Create a broadcast channel for progress updates
     let (tx, _rx) = broadcast::channel::<EmbeddingProgress>(100);

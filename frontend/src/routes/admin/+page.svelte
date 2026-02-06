@@ -330,6 +330,7 @@
 					if (line.startsWith('data: ')) {
 						try {
 							const progress = JSON.parse(line.slice(6));
+							console.log('SSE progress:', progress);
 							embeddingProgress = progress;
 
 							if (progress.type === 'completed') {

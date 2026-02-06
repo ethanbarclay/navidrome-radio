@@ -23,9 +23,19 @@
 	let listenerCounts = $state<Record<string, number>>({});
 	let listenerCountsInterval: number;
 	let playbackAbortController: AbortController | null = null;
-
+	let mobileView = $state<'stations' | 'visualizer'>('stations');
 
 	let selectedStation = $derived(stations[selectedIndex] || null);
+
+	// Trigger resize when switching to visualizer view (Three.js needs this)
+	$effect(() => {
+		if (mobileView === 'visualizer') {
+			// Small delay to let the DOM update before triggering resize
+			setTimeout(() => {
+				window.dispatchEvent(new Event('resize'));
+			}, 50);
+		}
+	});
 
 	onMount(async () => {
 		sessionId = crypto.randomUUID();
@@ -358,42 +368,64 @@
 
 		<main class="main-content">
 			<!-- Left: Station Selector -->
-			<section class="station-selector">
+			<section class="station-selector" class:mobile-hidden={mobileView !== 'stations'}>
 				<div class="section-header">
-					<span>┌─ STATIONS ─────────────┐</span>
+					<span class="corner">┌</span>
+					<span class="line"></span>
+					<span class="title desktop-only">STATIONS</span>
+					<span class="title mobile-only">
+						<button class="inline-toggle" class:active={mobileView === 'stations'} onclick={() => mobileView = 'stations'}>STATIONS</button>
+						<button class="inline-toggle" class:active={mobileView === 'visualizer'} onclick={() => mobileView = 'visualizer'}>VISUALIZER</button>
+					</span>
+					<span class="line"></span>
+					<span class="corner">┐</span>
 				</div>
-				<button class="tune-arrow tune-up" onclick={tuneUp} disabled={selectedIndex === 0}>
-					<span>▲</span>
-				</button>
-				<div class="station-list">
-					{#each stations as station, i}
-						<button
-							class="station-item"
-							class:selected={i === selectedIndex}
-							onclick={() => selectStation(i)}
-						>
-							<span class="selector">{i === selectedIndex ? '►' : '○'}</span>
-							<span class="freq">{(88.1 + i * 0.2).toFixed(1)}</span>
-							<span class="name">{station.name}</span>
-							<span class="listeners">[{listenerCounts[station.id] || 0}]</span>
-						</button>
-					{/each}
+				<div class="section-body">
+					<button class="tune-arrow tune-up" onclick={tuneUp} disabled={selectedIndex === 0}>
+						<span>▲</span>
+					</button>
+					<div class="station-list">
+						{#each stations as station, i}
+							<button
+								class="station-item"
+								class:selected={i === selectedIndex}
+								onclick={() => selectStation(i)}
+							>
+								<span class="selector">{i === selectedIndex ? '►' : '○'}</span>
+								<span class="freq">{(88.1 + i * 0.2).toFixed(1)}</span>
+								<span class="name">{station.name}</span>
+								<span class="listeners">[{listenerCounts[station.id] || 0}]</span>
+							</button>
+						{/each}
+					</div>
+					<button class="tune-arrow tune-down" onclick={tuneDown} disabled={selectedIndex === stations.length - 1}>
+						<span>▼</span>
+					</button>
 				</div>
-				<button class="tune-arrow tune-down" onclick={tuneDown} disabled={selectedIndex === stations.length - 1}>
-					<span>▼</span>
-				</button>
 				<div class="section-footer">
-					<span>└─ ↑/↓ to tune ──────────┘</span>
+					<span class="corner">└</span>
+					<span class="line"></span>
+					<span class="title">↑/↓ to tune</span>
+					<span class="line"></span>
+					<span class="corner">┘</span>
 				</div>
 			</section>
 
 			<!-- Center: Selected Station Details -->
-			<section class="station-details">
+			<section class="station-details" class:mobile-hidden={mobileView !== 'visualizer'}>
 				{#if selectedStation}
 					<div class="section-header">
-						<span>┌─ {selectedStation.name.toUpperCase()} ─┐</span>
+						<span class="corner">┌</span>
+						<span class="line"></span>
+						<span class="title desktop-only">{selectedStation.name.toUpperCase()}</span>
+						<span class="title mobile-only">
+							<button class="inline-toggle" class:active={mobileView === 'stations'} onclick={() => mobileView = 'stations'}>STATIONS</button>
+							<button class="inline-toggle" class:active={mobileView === 'visualizer'} onclick={() => mobileView = 'visualizer'}>VISUALIZER</button>
+						</span>
+						<span class="line"></span>
+						<span class="corner">┐</span>
 					</div>
-					<div class="details-content">
+					<div class="section-body details-content">
 						<div class="station-image">
 							<pre class="placeholder-art">╭────────────╮
 │  ♪  ♫  ♪  │
@@ -427,7 +459,9 @@
 						</div>
 					</div>
 					<div class="section-footer">
-						<span>└───────────────────────┘</span>
+						<span class="corner">└</span>
+						<span class="line"></span>
+						<span class="corner">┘</span>
 					</div>
 				{/if}
 			</section>
@@ -435,10 +469,14 @@
 			<!-- Right: Now Playing -->
 			<section class="now-playing">
 				<div class="section-header">
-					<span>┌─ NOW PLAYING ──────────────┐</span>
+					<span class="corner">┌</span>
+					<span class="line"></span>
+					<span class="title">NOW PLAYING</span>
+					<span class="line"></span>
+					<span class="corner">┐</span>
 				</div>
 				{#if nowPlaying}
-					<div class="np-content">
+					<div class="section-body np-content">
 						<div class="album-art">
 							{#if nowPlaying.track.albumArt}
 								<img src={nowPlaying.track.albumArt} alt={nowPlaying.track.album} />
@@ -470,12 +508,14 @@
 						</div>
 					</div>
 				{:else}
-					<div class="np-empty">
+					<div class="section-body np-empty">
 						<pre>  No track info available</pre>
 					</div>
 				{/if}
 				<div class="section-footer">
-					<span>└────────────────────────────┘</span>
+					<span class="corner">└</span>
+					<span class="line"></span>
+					<span class="corner">┘</span>
 				</div>
 			</section>
 		</main>
@@ -483,18 +523,20 @@
 		<!-- Controls -->
 		<footer class="controls">
 			<div class="control-bar">
-				<span class="border">├</span>
+				<span class="corner">├</span>
+				<span class="line"></span>
 				<button class="ctrl-btn" onclick={togglePlayback}>
-					[{isPlaying ? 'STOP' : 'PLAY'}]
+					{isPlaying ? 'STOP' : 'PLAY'}
 				</button>
 				{#if authStore.isAdmin}
 					<button class="ctrl-btn" onclick={handleSkip}>
-						[SKIP]
+						SKIP
 					</button>
 				{/if}
-				<span class="spacer"></span>
+				<span class="line"></span>
 				<span class="help">↑↓:tune  SPACE:play  {authStore.isAdmin ? 'n:skip' : ''}</span>
-				<span class="border">┤</span>
+				<span class="line"></span>
+				<span class="corner">┤</span>
 			</div>
 		</footer>
 	{/if}
@@ -655,19 +697,108 @@
 		overflow: hidden;
 	}
 
+	/* Mobile/Desktop visibility */
+	.mobile-only {
+		display: none;
+	}
+
+	.inline-toggle {
+		background: transparent;
+		border: none;
+		color: #555;
+		font-family: inherit;
+		font-size: 0.75rem;
+		cursor: pointer;
+		padding: 0;
+		transition: color 0.15s;
+	}
+
+	.inline-toggle:hover {
+		color: #888;
+	}
+
+	.inline-toggle.active {
+		color: #00ff88;
+	}
+
 	@media (max-width: 1000px) {
+		.desktop-only {
+			display: none;
+		}
+
+		.mobile-only {
+			display: flex;
+			gap: 0.75rem;
+		}
+
 		.main-content {
 			grid-template-columns: 1fr;
-			grid-template-rows: auto 1fr auto;
+			grid-template-rows: 1fr auto;
+		}
+
+		.mobile-hidden {
+			display: none !important;
+		}
+
+		/* Station details on mobile - fill space with visualizer */
+		.station-details {
+			flex: 1;
+			min-height: 300px;
+		}
+
+		.station-details .viz-container {
+			flex: 1;
+			min-height: 200px;
+			height: 100%;
+		}
+
+		/* Hide station info on mobile visualizer view to give more space */
+		.station-details .station-image,
+		.station-details .station-info {
+			display: none;
 		}
 	}
 
 	.section-header, .section-footer {
-		font-size: 0.75rem;
-		color: #444;
-		white-space: nowrap;
-		overflow: hidden;
+		display: flex;
+		align-items: center;
+		font-size: 0.7rem;
+		color: #333;
 		flex-shrink: 0;
+		padding: 0 1px; /* Align corners with 1px border */
+	}
+
+	.section-header .corner,
+	.section-footer .corner {
+		flex-shrink: 0;
+		line-height: 1;
+	}
+
+	.section-header .line,
+	.section-footer .line {
+		flex: 1;
+		height: 1px;
+		background: #333;
+		min-width: 4px;
+	}
+
+	.section-header .title,
+	.section-footer .title {
+		padding: 0 0.4rem;
+		color: #555;
+		white-space: nowrap;
+		font-size: 0.65rem;
+		letter-spacing: 0.05em;
+	}
+
+	.section-body {
+		flex: 1;
+		border-left: 1px solid #333;
+		border-right: 1px solid #333;
+		min-height: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
 	}
 
 	/* Station Selector */
@@ -678,13 +809,14 @@
 		overflow: hidden;
 	}
 
+
 	.tune-arrow {
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		background: #111;
-		border: 1px solid #333;
-		border-top: none;
+		border: none;
+		border-bottom: 1px solid #333;
 		color: #00ff88;
 		font-family: inherit;
 		font-size: 0.9rem;
@@ -693,9 +825,9 @@
 		transition: all 0.1s;
 	}
 
-	.tune-arrow.tune-up {
-		border-top: 1px solid #333;
+	.tune-arrow.tune-down {
 		border-bottom: none;
+		border-top: 1px solid #333;
 	}
 
 	.tune-arrow:hover:not(:disabled) {
@@ -712,8 +844,6 @@
 		flex: 1;
 		overflow-y: auto;
 		overflow-x: hidden;
-		border-left: 1px solid #333;
-		border-right: 1px solid #333;
 		min-height: 0;
 	}
 
@@ -809,13 +939,10 @@
 
 	.details-content {
 		flex: 1;
-		border-left: 1px solid #333;
-		border-right: 1px solid #333;
 		padding: 0.75rem 1rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
-		overflow: hidden;
 		min-height: 0;
 	}
 
@@ -910,15 +1037,10 @@
 	}
 
 	.np-content {
-		flex: 1;
-		border-left: 1px solid #333;
-		border-right: 1px solid #333;
 		padding: 0.75rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
-		overflow: hidden;
-		min-height: 0;
 	}
 
 	.album-art {
@@ -1010,14 +1132,12 @@
 	}
 
 	.np-empty {
-		flex: 1;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border-left: 1px solid #333;
-		border-right: 1px solid #333;
 		color: #333;
 		font-size: 0.8rem;
+		padding: 2rem;
 	}
 
 	/* Controls */
@@ -1029,23 +1149,30 @@
 	.control-bar {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
 		padding: 0.4rem 0;
-		border-top: 1px solid #333;
 	}
 
-	.control-bar .border {
+	.control-bar .corner {
 		color: #333;
+		flex-shrink: 0;
+	}
+
+	.control-bar .line {
+		flex: 1;
+		height: 1px;
+		background: #333;
+		min-width: 8px;
 	}
 
 	.ctrl-btn {
 		background: transparent;
-		border: none;
+		border: 1px solid #333;
 		color: #00ff88;
 		font-family: inherit;
 		font-size: 0.8rem;
 		cursor: pointer;
-		padding: 0.2rem 0.4rem;
+		padding: 0.2rem 0.6rem;
+		margin: 0 0.25rem;
 		transition: all 0.1s;
 	}
 
@@ -1053,12 +1180,9 @@
 		background: #1a2a1a;
 	}
 
-	.spacer {
-		flex: 1;
-	}
-
 	.help {
 		color: #444;
 		font-size: 0.7rem;
+		padding: 0 0.5rem;
 	}
 </style>
