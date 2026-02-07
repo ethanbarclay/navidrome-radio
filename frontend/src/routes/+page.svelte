@@ -578,13 +578,17 @@
 		background: #0a0a0a;
 		color: #e0e0e0;
 		font-family: 'Berkeley Mono', 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+		/* iOS Safari safe area support */
+		padding-bottom: env(safe-area-inset-bottom, 0);
 	}
 
 	.tuner-container {
 		height: 100vh;
+		height: 100dvh; /* Dynamic viewport height - accounts for iOS Safari URL bar */
 		display: flex;
 		flex-direction: column;
 		padding: 0.75rem 1rem;
+		padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0));
 		box-sizing: border-box;
 		overflow: hidden;
 	}
@@ -1304,6 +1308,8 @@
 	.controls {
 		margin-top: 0.5rem;
 		flex-shrink: 0;
+		/* iOS Safari safe area for bottom controls */
+		padding-bottom: env(safe-area-inset-bottom, 0);
 	}
 
 	.control-bar {
